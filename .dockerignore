@@ -1,0 +1,14 @@
+.venv/
+.git/
+.gitignore
+.env
+.env.*
+!.env.example
+__pycache__/
+**/__pycache__/
+*.pyc
+bruno/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+README.md

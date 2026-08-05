@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
+from app.auth import get_current_user
 from app.config import settings
 from app.db import get_collection
 from app.schemas import SearchRequest, SearchResponse, SearchResult
@@ -8,7 +9,9 @@ router = APIRouter()
 
 
 @router.post("/search", response_model=SearchResponse)
-async def search(payload: SearchRequest, request: Request) -> SearchResponse:
+async def search(
+    payload: SearchRequest, request: Request, email: str = Depends(get_current_user)
+) -> SearchResponse:
     collection = get_collection(request.app)
 
     pipeline = [
