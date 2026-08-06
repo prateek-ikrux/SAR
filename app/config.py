@@ -22,12 +22,10 @@ class Settings(BaseSettings):
     allowed_emails_collection: str = "allowed_emails"
     otp_collection: str = "otp_codes"
 
-    smtp_host: str
-    smtp_port: int = 587
-    smtp_user: str
-    smtp_password: str
-    smtp_from_email: str
-    smtp_use_tls: bool = True
+    graph_tenant_id: str
+    graph_client_id: str
+    graph_client_secret: str
+    graph_sender_email: str
 
     cors_allow_origins: str = "*"
 

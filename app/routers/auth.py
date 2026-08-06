@@ -1,14 +1,13 @@
 import hmac
 import logging
 from datetime import datetime, timedelta, timezone
-from email.message import EmailMessage
 
-import aiosmtplib
 from fastapi import APIRouter, HTTPException, Request
 
 from app.auth import create_access_token, generate_otp, hash_otp
 from app.config import settings
 from app.db import get_allowed_emails_collection, get_otp_collection
+from app.graph_mailer import send_mail
 from app.schemas import MessageResponse, OTPRequest, OTPVerify, TokenResponse
 
 router = APIRouter(prefix="/auth")
@@ -18,20 +17,10 @@ GENERIC_OTP_MESSAGE = "If this email is registered, an OTP has been sent."
 
 
 async def send_otp_email(to_email: str, otp: str) -> None:
-    message = EmailMessage()
-    message["From"] = settings.smtp_from_email
-    message["To"] = to_email
-    message["Subject"] = "Your login code"
-    message.set_content(
-        f"Your one-time code is {otp}. It expires in {settings.otp_ttl_minutes} minutes."
-    )
-    await aiosmtplib.send(
-        message,
-        hostname=settings.smtp_host,
-        port=settings.smtp_port,
-        username=settings.smtp_user or None,
-        password=settings.smtp_password or None,
-        start_tls=settings.smtp_use_tls,
+    await send_mail(
+        to_email,
+        "Your login code",
+        f"Your one-time code is {otp}. It expires in {settings.otp_ttl_minutes} minutes.",
     )
 
 
