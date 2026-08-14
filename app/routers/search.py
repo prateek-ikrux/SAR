@@ -14,16 +14,18 @@ async def search(
 ) -> SearchResponse:
     collection = get_collection(request.app)
 
+    vector_search = {
+        "index": settings.vector_index_name,
+        "path": settings.vector_path,
+        "query": payload.query,
+        "limit": payload.limit,
+        "exact": payload.exact,
+    }
+    if not payload.exact:
+        vector_search["numCandidates"] = payload.num_candidates
+
     pipeline = [
-        {
-            "$vectorSearch": {
-                "index": settings.vector_index_name,
-                "path": settings.vector_path,
-                "query": payload.query,
-                "numCandidates": payload.num_candidates,
-                "limit": payload.limit,
-            }
-        },
+        {"$vectorSearch": vector_search},
         {"$set": {"score": {"$meta": "vectorSearchScore"}}},
     ]
 

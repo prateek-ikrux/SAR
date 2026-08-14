@@ -77,9 +77,10 @@ export function search(
   query: string,
   limit: number,
   numCandidates: number,
+  exact: boolean,
 ): Promise<SearchResponse> {
   return apiFetch<SearchResponse>("/search", {
     token,
-    body: { query, limit, num_candidates: numCandidates },
+    body: { query, limit, num_candidates: numCandidates, exact },
   });
 }

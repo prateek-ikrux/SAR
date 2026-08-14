@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 
 class SearchRequest(BaseModel):
@@ -7,6 +7,15 @@ class SearchRequest(BaseModel):
     num_candidates: int = Field(
         100, ge=1, le=10000, description="Candidates considered during the ANN search"
     )
+    exact: bool = Field(
+        True, description="Whether to perform an exact search instead of ANN"
+    )
+
+    @model_validator(mode="after")
+    def check_num_candidates(self) -> "SearchRequest":
+        if not self.exact and self.num_candidates < self.limit:
+            raise ValueError("num_candidates must be greater than or equal to limit")
+        return self
 
 
 class SearchResult(BaseModel):

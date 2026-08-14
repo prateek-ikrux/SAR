@@ -64,7 +64,13 @@ function SearchScreen() {
     setIsSearching(true);
 
     try {
-      const response = await search(auth.token, query, options.limit, options.numCandidates);
+      const response = await search(
+        auth.token,
+        query,
+        options.limit,
+        options.numCandidates,
+        options.exact,
+      );
       setTurns((current) =>
         current.map((turn) =>
           turn.id === turnId ? { ...turn, status: "done", results: response.results } : turn,
@@ -112,7 +118,7 @@ function SearchScreen() {
                 <button
                   key={example}
                   type="button"
-                  onClick={() => runSearch(example, { limit: 10, numCandidates: 100 })}
+                  onClick={() => runSearch(example, { limit: 10, numCandidates: 100, exact: true })}
                   className="rounded-full border px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted"
                 >
                   {example}

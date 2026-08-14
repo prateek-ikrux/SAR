@@ -6,13 +6,15 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
 
 export type SearchOptions = {
   limit: number;
   numCandidates: number;
+  exact: boolean;
 };
 
-const DEFAULT_OPTIONS: SearchOptions = { limit: 10, numCandidates: 100 };
+const DEFAULT_OPTIONS: SearchOptions = { limit: 10, numCandidates: 100, exact: true };
 
 export function ChatInput({
   disabled,
@@ -43,6 +45,16 @@ export function ChatInput({
         </PopoverTrigger>
         <PopoverContent className="w-64" align="start">
           <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="exact">Exact search</Label>
+              <Switch
+                id="exact"
+                checked={options.exact}
+                onCheckedChange={(checked) =>
+                  setOptions((current) => ({ ...current, exact: checked }))
+                }
+              />
+            </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="limit">Results to return</Label>
               <Input
@@ -67,6 +79,7 @@ export function ChatInput({
                 min={1}
                 max={10000}
                 value={options.numCandidates}
+                disabled={options.exact}
                 onChange={(event) =>
                   setOptions((current) => ({
                     ...current,
@@ -76,7 +89,9 @@ export function ChatInput({
               />
             </div>
             <p className="text-xs text-muted-foreground">
-              Higher candidate counts can improve accuracy at the cost of speed.
+              {options.exact
+                ? "Exact search scans every candidate for the most accurate results."
+                : "Higher candidate counts can improve accuracy at the cost of speed."}
             </p>
           </div>
         </PopoverContent>
