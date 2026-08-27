@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+# Never commit real configuration - only the template
+.env
+.env.*
+!.env.example
+*.bak
+
+.ruff_cache/
+.pytest_cache/
