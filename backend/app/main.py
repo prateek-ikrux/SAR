@@ -32,12 +32,6 @@ CSRF_EXEMPT_PATHS = {
 async def ensure_indexes() -> None:
     """Create this application's own indexes. Never touches the ats database."""
     await db.users().create_index([("email", ASCENDING)], unique=True, name="uniq_email")
-    await db.sessions().create_index([("user_id", ASCENDING), ("created_at", DESCENDING)], name="by_user")
-    await db.sessions().create_index([("refresh_jti", ASCENDING)], name="by_refresh_jti")
-    await db.sessions().create_index([("family_id", ASCENDING)], name="by_family")
-    await db.sessions().create_index(
-        [("absolute_expires_at", ASCENDING)], expireAfterSeconds=86_400, name="ttl_expired_sessions"
-    )
     await db.otp_codes().create_index([("email", ASCENDING), ("created_at", DESCENDING)], name="by_email")
     # Spent and expired codes are swept an hour later, which is long enough for
     # the per-hour request limit to still see them.
@@ -123,10 +117,7 @@ async def csrf_protection(request: Request, call_next):
         and request.url.path not in CSRF_EXEMPT_PATHS
         and not bearer_token(request)
     ):
-        has_session = (
-            settings.access_cookie_name in request.cookies or settings.refresh_cookie_name in request.cookies
-        )
-        if has_session:
+        if settings.access_cookie_name in request.cookies:
             cookie_token = request.cookies.get(settings.csrf_cookie_name)
             header_token = request.headers.get(settings.csrf_header_name)
             if not cookie_token or not header_token or cookie_token != header_token:

@@ -14,7 +14,6 @@ from app.config import settings
 _hasher = PasswordHasher()
 
 ACCESS = "access"
-REFRESH = "refresh"
 
 
 def hash_secret(secret: str) -> str:
@@ -46,48 +45,27 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def _encode(payload: dict[str, Any]) -> str:
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
-
-
-def create_access_token(*, user_id: str, role: str, session_id: str) -> tuple[str, datetime]:
+def create_access_token(*, user_id: str, role: str) -> tuple[str, datetime]:
+    """The only token this service issues. Stateless: once signed it is valid
+    until it expires."""
     now = utcnow()
-    expires_at = now + timedelta(minutes=settings.access_token_ttl_minutes)
-    token = _encode(
+    expires_at = now + timedelta(hours=settings.access_token_ttl_hours)
+    token = jwt.encode(
         {
             "sub": user_id,
-            "sid": session_id,
             "role": role,
             "typ": ACCESS,
             "jti": uuid.uuid4().hex,
             "iat": int(now.timestamp()),
             "exp": int(expires_at.timestamp()),
-        }
+        },
+        settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
     )
     return token, expires_at
 
 
-def create_refresh_token(
-    *, user_id: str, session_id: str, absolute_expires_at: datetime
-) -> tuple[str, str, datetime]:
-    """Returns (token, jti, expires_at). Never outlives the session's absolute expiry."""
-    now = utcnow()
-    expires_at = min(now + timedelta(hours=settings.refresh_token_ttl_hours), absolute_expires_at)
-    jti = uuid.uuid4().hex
-    token = _encode(
-        {
-            "sub": user_id,
-            "sid": session_id,
-            "typ": REFRESH,
-            "jti": jti,
-            "iat": int(now.timestamp()),
-            "exp": int(expires_at.timestamp()),
-        }
-    )
-    return token, jti, expires_at
-
-
-def decode_token(token: str, *, expected_type: str) -> dict[str, Any] | None:
+def decode_token(token: str, *, expected_type: str = ACCESS) -> dict[str, Any] | None:
     try:
         payload = jwt.decode(
             token,

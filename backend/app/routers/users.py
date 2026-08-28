@@ -69,11 +69,10 @@ async def update_user(user_id: str, payload: UpdateUserRequest, admin: AdminUser
                 detail="This is the last active admin. Promote another admin first.",
             )
 
+    # Role and active changes take effect on this user's very next request:
+    # every authenticated request re-reads the account rather than trusting the
+    # role baked into their token.
     await db.users().update_one({"_id": oid}, {"$set": updates})
-
-    # Changing a role or the active flag must invalidate live sessions.
-    if {"role", "active"} & updates.keys():
-        await auth_service.revoke_all_sessions(oid, reason="account_changed")
 
     updated = await db.users().find_one({"_id": oid})
     log.info(
@@ -101,7 +100,6 @@ async def delete_user(user_id: str, admin: AdminUser, response: Response) -> Res
         if remaining == 0:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This is the last active admin")
 
-    await auth_service.revoke_all_sessions(oid, reason="user_deleted")
     await db.users().delete_one({"_id": oid})
     log.info("user deleted", extra={"actor_id": str(admin["_id"]), "user_id": user_id})
 

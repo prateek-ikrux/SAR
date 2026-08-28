@@ -73,7 +73,7 @@ async def _access_token() -> str:
     return _token
 
 
-async def send_mail(*, to: str, subject: str, html_body: str, text_body: str) -> None:
+async def send_mail(*, to: str, subject: str, html_body: str) -> None:
     if not settings.graph_configured:
         raise MailError("Email delivery is not configured on this server.", status_code=503)
 
@@ -110,8 +110,9 @@ async def send_mail(*, to: str, subject: str, html_body: str, text_body: str) ->
     log.info("otp email sent", extra={"to": to, "sender": settings.graph_sender})
 
 
-def render_code_email(*, code: str, ttl_minutes: int) -> tuple[str, str]:
-    """Return (html, plain_text) for a sign-in code."""
+def render_code_email(*, code: str, ttl_minutes: int) -> str:
+    """Return the HTML body for a sign-in code. Graph sendMail takes a single
+    contentType, so there is no plain-text alternative to build."""
     safe_code = html.escape(code)
     spaced = " ".join(safe_code)
 
@@ -149,13 +150,7 @@ def render_code_email(*, code: str, ttl_minutes: int) -> tuple[str, str]:
   </body>
 </html>"""
 
-    text_body = (
-        f"ikrux Candidate Search\n\n"
-        f"Your sign-in code is {code}\n\n"
-        f"It expires in {ttl_minutes} minutes and can only be used once.\n"
-        f"If you did not try to sign in, you can ignore this email.\n"
-    )
-    return html_body, text_body
+    return html_body
 
 
 async def healthy() -> bool:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 import re
 import time
@@ -15,35 +16,103 @@ log = logging.getLogger(__name__)
 _HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*$")
 _WHITESPACE_RE = re.compile(r"\s+")
 _MD_NOISE_RE = re.compile(r"[#*_`>]+")
+# The PDF-to-markdown conversion leaves these behind on nearly every document.
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_HTML_TAG_RE = re.compile(r"<[^>]{1,80}>")
+
+# Headings that are a section label or a contact detail rather than a name.
+_NOT_A_NAME = {
+    "summary",
+    "profile",
+    "profile summary",
+    "professional summary",
+    "career summary",
+    "resume",
+    "curriculum vitae",
+    "cv",
+    "objective",
+    "career objective",
+    "about",
+    "about me",
+    "personal details",
+    "contact",
+    "contact details",
+    "experience",
+    "work experience",
+    "professional experience",
+    "education",
+    "skills",
+    "technical skills",
+    "declaration",
+    "achievements",
+    "projects",
+}
 
 SNIPPET_PREVIEW_CHARS = 320
 
 
 # --------------------------------------------------------------------- presentation
-def extract_headline(text: str) -> str | None:
-    """Best-effort candidate name from the resume's first markdown heading.
+def clean_text(text: str) -> str:
+    """Strip conversion artefacts the corpus is full of.
 
-    No LLM, no enrichment pipeline - just the first '## NAME' line, which is how
-    the converted resumes in this corpus are shaped. Falls back to the first
-    non-trivial line.
+    Every document carries '<!-- image -->' markers from the PDF conversion, and
+    HTML entities that were escaped once already - so '&amp;' would otherwise
+    reach the browser and be escaped a second time, rendering literally.
+    """
+    if not text:
+        return ""
+    text = _HTML_COMMENT_RE.sub(" ", text)
+    text = _HTML_TAG_RE.sub(" ", text)
+    return html.unescape(text)
+
+
+def _looks_like_contact(value: str) -> bool:
+    if "@" in value:
+        return True
+    digits = sum(c.isdigit() for c in value)
+    return digits >= 8 and digits >= len(value.replace(" ", "")) - 3
+
+
+def _tidy_name(value: str) -> str:
+    value = _WHITESPACE_RE.sub(" ", value).strip(" -–—:·|")
+    return value.title() if value.isupper() else value
+
+
+def extract_headline(text: str) -> str | None:
+    """Best-effort candidate name from the resume's first usable markdown heading.
+
+    No LLM, no enrichment pipeline. Headings that are section labels ('Summary')
+    or contact details - this corpus routinely renders the email and phone as
+    headings too - are skipped in favour of the next candidate.
     """
     if not text:
         return None
-    for line in text.splitlines()[:40]:
+    lines = clean_text(text).splitlines()
+
+    fallback: str | None = None
+    for line in lines[:40]:
         match = _HEADING_RE.match(line)
-        if match:
-            candidate = match.group(1).strip()
-            if 2 <= len(candidate) <= 120:
-                return candidate.title() if candidate.isupper() else candidate
-    for line in text.splitlines()[:10]:
-        stripped = _MD_NOISE_RE.sub("", line).strip()
-        if 2 <= len(stripped) <= 120:
-            return stripped.title() if stripped.isupper() else stripped
-    return None
+        if not match:
+            continue
+        candidate = _tidy_name(match.group(1))
+        if not (2 <= len(candidate) <= 120):
+            continue
+        if _looks_like_contact(candidate):
+            continue
+        if candidate.lower().strip(" :") in _NOT_A_NAME:
+            fallback = fallback or candidate
+            continue
+        return candidate
+
+    for line in lines[:10]:
+        stripped = _tidy_name(_MD_NOISE_RE.sub("", line))
+        if 2 <= len(stripped) <= 120 and not _looks_like_contact(stripped):
+            return stripped
+    return fallback
 
 
 def build_snippet(text: str, limit: int = SNIPPET_PREVIEW_CHARS) -> str:
-    cleaned = _WHITESPACE_RE.sub(" ", _MD_NOISE_RE.sub(" ", text or "")).strip()
+    cleaned = _WHITESPACE_RE.sub(" ", _MD_NOISE_RE.sub(" ", clean_text(text))).strip()
     if len(cleaned) <= limit:
         return cleaned
     return cleaned[:limit].rsplit(" ", 1)[0] + "…"
@@ -235,7 +304,7 @@ async def get_profile(profile_id: str) -> dict[str, Any] | None:
         )
         duplicates = [{"id": str(d["_id"]), "file_name": d.get("file_name"), "score": None} for d in cursor]
 
-    document = doc.get("document", "") or ""
+    document = clean_text(doc.get("document", "") or "")
     return {
         "id": str(doc["_id"]),
         "headline": extract_headline(document),

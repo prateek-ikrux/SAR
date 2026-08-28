@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-import uuid
 from collections import defaultdict, deque
-from datetime import timedelta
 from typing import Any
 
 from bson import ObjectId
@@ -12,7 +10,7 @@ from bson.errors import InvalidId
 
 from app import db
 from app.config import settings
-from app.security import create_access_token, create_refresh_token, utcnow
+from app.security import create_access_token, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -79,125 +77,18 @@ async def create_user(*, email: str, name: str, role: str) -> dict[str, Any]:
     return doc
 
 
-# --------------------------------------------------------------------- sessions
-async def start_session(*, user: dict[str, Any], ip: str | None, user_agent: str | None) -> dict[str, Any]:
-    now = utcnow()
-    absolute_expires_at = now + timedelta(hours=settings.refresh_token_ttl_hours)
-    session_oid = ObjectId()
-    session_id = str(session_oid)
+# --------------------------------------------------------------------- tokens
+def issue_access_token(user: dict[str, Any]) -> dict[str, Any]:
+    """Mint the single access token this service uses.
 
-    refresh_token, refresh_jti, refresh_expires_at = create_refresh_token(
-        user_id=str(user["_id"]), session_id=session_id, absolute_expires_at=absolute_expires_at
-    )
-    access_token, access_expires_at = create_access_token(
-        user_id=str(user["_id"]), role=user.get("role", "recruiter"), session_id=session_id
-    )
-
-    await db.sessions().insert_one(
-        {
-            "_id": session_oid,
-            "user_id": user["_id"],
-            "family_id": uuid.uuid4().hex,
-            "refresh_jti": refresh_jti,
-            "created_at": now,
-            "last_used_at": now,
-            "absolute_expires_at": absolute_expires_at,
-            "revoked_at": None,
-            "revoked_reason": None,
-            "ip": ip,
-            "user_agent": (user_agent or "")[:300] or None,
-        }
-    )
-
-    return {
-        "session_id": session_id,
-        "access_token": access_token,
-        "access_expires_at": access_expires_at,
-        "refresh_token": refresh_token,
-        "refresh_expires_at": refresh_expires_at,
-        "absolute_expires_at": absolute_expires_at,
-    }
-
-
-async def rotate_session(*, payload: dict[str, Any]) -> dict[str, Any]:
-    """Consume a refresh token and issue a fresh pair.
-
-    Presenting a refresh token that has already been rotated away is treated as
-    theft: the whole session family is revoked immediately.
+    Nothing is written to the database: the token is self-contained and stays
+    valid until it expires. Access is still withdrawn immediately when an account
+    is deactivated or deleted, because every authenticated request re-reads the
+    user - but an individual token cannot be revoked on its own.
     """
-    session_id = payload.get("sid")
-    jti = payload.get("jti")
-    if not session_id or not jti:
-        raise AuthError("Invalid refresh token")
-
-    session = await db.sessions().find_one({"_id": to_object_id(session_id)})
-    if not session:
-        raise AuthError("Session not found. Please sign in again.")
-
-    now = utcnow()
-    if session.get("revoked_at"):
-        raise AuthError("Session has been revoked. Please sign in again.")
-    if session["absolute_expires_at"] <= now:
-        await revoke_session(session["_id"], reason="expired")
-        raise AuthError("Session expired. Please sign in again.")
-
-    if session["refresh_jti"] != jti:
-        await db.sessions().update_many(
-            {"family_id": session["family_id"], "revoked_at": None},
-            {"$set": {"revoked_at": now, "revoked_reason": "refresh_reuse_detected"}},
-        )
-        log.warning(
-            "refresh token reuse detected",
-            extra={"session_id": session_id, "user_id": str(session["user_id"])},
-        )
-        raise AuthError("Session invalidated for security reasons. Please sign in again.")
-
-    user = await db.users().find_one({"_id": session["user_id"]})
-    if not user or not user.get("active", True):
-        await revoke_session(session["_id"], reason="user_inactive")
-        raise AuthError("This account is no longer active.", status_code=403)
-
-    refresh_token, new_jti, refresh_expires_at = create_refresh_token(
-        user_id=str(user["_id"]),
-        session_id=session_id,
-        absolute_expires_at=session["absolute_expires_at"],
+    token, expires_at = create_access_token(user_id=str(user["_id"]), role=user.get("role", "recruiter"))
+    log.info(
+        "access token issued",
+        extra={"user_id": str(user["_id"]), "expires_at": expires_at.isoformat()},
     )
-    access_token, access_expires_at = create_access_token(
-        user_id=str(user["_id"]), role=user.get("role", "recruiter"), session_id=session_id
-    )
-    await db.sessions().update_one(
-        {"_id": session["_id"]}, {"$set": {"refresh_jti": new_jti, "last_used_at": now}}
-    )
-
-    return {
-        "user": user,
-        "session_id": session_id,
-        "access_token": access_token,
-        "access_expires_at": access_expires_at,
-        "refresh_token": refresh_token,
-        "refresh_expires_at": refresh_expires_at,
-        "absolute_expires_at": session["absolute_expires_at"],
-    }
-
-
-async def revoke_session(session_id: ObjectId | str, *, reason: str) -> None:
-    oid = session_id if isinstance(session_id, ObjectId) else to_object_id(session_id)
-    await db.sessions().update_one(
-        {"_id": oid, "revoked_at": None}, {"$set": {"revoked_at": utcnow(), "revoked_reason": reason}}
-    )
-
-
-async def revoke_all_sessions(user_id: ObjectId, *, reason: str, keep_session_id: str | None = None) -> int:
-    query: dict[str, Any] = {"user_id": user_id, "revoked_at": None}
-    if keep_session_id:
-        query["_id"] = {"$ne": to_object_id(keep_session_id)}
-    result = await db.sessions().update_many(
-        query, {"$set": {"revoked_at": utcnow(), "revoked_reason": reason}}
-    )
-    return result.modified_count
-
-
-async def active_session(session_id: str) -> dict[str, Any] | None:
-    return await db.sessions().find_one(
-        {"_id": to_object_id(session_id), "revoked_at": None, "absolute_expires_at": {"$gt": utcnow()}}
-    )
+    return {"access_token": token, "expires_at": expires_at}

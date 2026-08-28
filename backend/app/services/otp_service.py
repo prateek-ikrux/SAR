@@ -94,13 +94,12 @@ async def request_code(*, email: str, ip: str | None, user_agent: str | None) ->
         )
         return
 
-    html_body, text_body = mailer.render_code_email(code=code, ttl_minutes=settings.otp_ttl_minutes)
+    html_body = mailer.render_code_email(code=code, ttl_minutes=settings.otp_ttl_minutes)
     try:
         await mailer.send_mail(
             to=address,
             subject=f"{code} is your ikrux Candidate Search sign-in code",
             html_body=html_body,
-            text_body=text_body,
         )
     except mailer.MailError as exc:
         # The code is already stored; invalidate it so a failed send cannot leave

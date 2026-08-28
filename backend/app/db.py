@@ -57,10 +57,6 @@ def users() -> AsyncCollection:
     return app_db()["users"]
 
 
-def sessions() -> AsyncCollection:
-    return app_db()["sessions"]
-
-
 def otp_codes() -> AsyncCollection:
     return app_db()["otp_codes"]
 

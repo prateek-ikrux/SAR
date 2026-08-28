@@ -43,23 +43,18 @@ async def current_user(request: Request) -> dict[str, Any]:
 
     payload = decode_token(token, expected_type=ACCESS)
     if not payload:
-        raise _unauthorized("Session expired or invalid")
+        raise _unauthorized("Your session has expired. Please sign in again.")
 
-    session_id = payload.get("sid")
-    if not session_id:
-        raise _unauthorized("Session expired or invalid")
-
-    # Sessions are revocable, so every request confirms the session is still
-    # live. One indexed lookup; access tokens are short-lived anyway.
-    session = await auth_service.active_session(session_id)
-    if not session:
-        raise _unauthorized("Session has been revoked. Please sign in again.")
-
+    # The token is self-contained, but the account behind it is still read on
+    # every request. That is what makes deactivating or deleting a user take
+    # effect immediately, and it keeps `role` authoritative in the database
+    # rather than frozen into a token issued up to 24 hours ago.
     user = await auth_service.get_user_by_id(payload["sub"])
-    if not user or not user.get("active", True):
+    if not user:
+        raise _unauthorized("This account no longer exists.")
+    if not user.get("active", True):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is not active")
 
-    user["_session_id"] = session_id
     return user
 
 

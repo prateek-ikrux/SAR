@@ -40,32 +40,17 @@ class UserOut(BaseModel):
     last_login_at: datetime | None = None
 
 
-class SessionOut(BaseModel):
-    id: str
-    created_at: datetime
-    last_used_at: datetime
-    absolute_expires_at: datetime
-    ip: str | None = None
-    user_agent: str | None = None
-    current: bool = False
-
-
 class LoginResponse(BaseModel):
     user: UserOut
     csrf_token: str
-    access_token_expires_at: datetime
-    session_expires_at: datetime
+    # When the access token expires. There is no refresh: signing in again is
+    # the only way to extend, so the frontend should send the user back to the
+    # sign-in screen at this point.
+    expires_at: datetime
     # Populated only when AUTH_TRANSPORT is bearer or both. Under cookie
-    # transport the tokens never touch JavaScript.
+    # transport the token never touches JavaScript.
     access_token: str | None = None
-    refresh_token: str | None = None
     token_type: str | None = None
-
-
-class RefreshRequest(BaseModel):
-    """Body for bearer transport. Cookie transport sends nothing."""
-
-    refresh_token: str | None = None
 
 
 # --------------------------------------------------------------------------- users

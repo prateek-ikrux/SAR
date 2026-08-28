@@ -4,7 +4,7 @@ Vector search and retrieval over the ikrux candidate resume corpus.
 FastAPI · MongoDB Atlas Vector Search (automated embedding, voyage-4) · MinIO · JWT auth over cookies or bearer tokens.
 
 Reads candidates from the existing `ats.profiles` collection. Writes nothing there.
-Its own users and sessions live in a separate database, `search_and_retrieval`.
+Its own users and sign-in codes live in a separate database, `search_and_retrieval`.
 
 ---
 
@@ -94,18 +94,17 @@ cross-domain gets `bearer` rather than looser cookies.
 
 **What each transport does**
 
-- `cookie` (default) — access, refresh and CSRF cookies. Tokens never reach
-  JavaScript, so XSS cannot exfiltrate a session. CSRF double-submit applies.
-- `bearer` — no cookies. `POST /api/auth/verify-code` returns `access_token` and
-  `refresh_token` in the body; send `Authorization: Bearer <access_token>`.
-  Refresh posts `{"refresh_token": "..."}`. No CSRF token needed: a header is not
-  an ambient credential. The tradeoff is that the frontend now holds the token,
-  so keep it in memory rather than `localStorage`.
-- `both` — accepts either, and returns tokens *and* sets cookies. The header wins
-  when both are present. Useful only while the deployment shape is unsettled.
+- `cookie` (default) — access and CSRF cookies. The token never reaches
+  JavaScript, so XSS cannot exfiltrate it. CSRF double-submit applies.
+- `bearer` — no cookies. `POST /api/auth/verify-code` returns `access_token` in
+  the body; send `Authorization: Bearer <access_token>`. No CSRF token needed: a
+  header is not an ambient credential. The tradeoff is that the frontend now
+  holds the token, so keep it in memory rather than `localStorage`.
+- `both` — accepts either, and returns the token *and* sets cookies. The header
+  wins when both are present. Useful while the deployment shape is unsettled.
 
-Everything else — rotation, reuse detection, revocable sessions, the 24-hour
-absolute expiry, roles — is identical across all three.
+Everything else — the 24-hour token lifetime, roles, the per-request account
+check — is identical across all three.
 
 Two guardrails catch the common mistakes at boot rather than in the browser:
 `COOKIE_SAMESITE=none` with an empty `CORS_ORIGINS` is refused outright
@@ -199,13 +198,9 @@ them.
 | Method | Path | Role | Notes |
 |---|---|---|---|
 | `POST` | `/api/auth/request-code` | — | Emails a one-time sign-in code |
-| `POST` | `/api/auth/verify-code` | — | Exchanges the code for a session |
-| `POST` | `/api/auth/refresh` | — | Rotates the refresh token |
-| `POST` | `/api/auth/logout` | any | Revokes this session |
-| `POST` | `/api/auth/logout-all` | any | Revokes every session for the user |
+| `POST` | `/api/auth/verify-code` | — | Exchanges the code for a 24h access token |
+| `POST` | `/api/auth/logout` | any | Clears cookies in this browser (token stays valid until expiry) |
 | `GET` | `/api/auth/me` | any | |
-| `GET` | `/api/auth/sessions` | any | Live sessions, current one flagged |
-| `DELETE` | `/api/auth/sessions/{id}` | any | Revoke one of your own sessions |
 | `POST` | `/api/search` | any | Vector search |
 | `GET` | `/api/profiles/{id}` | any | Full resume text + duplicates |
 | `GET` | `/api/profiles/{id}/resume` | any | Presigned MinIO URL (`?redirect=true` to jump straight to the PDF) |
@@ -283,7 +278,7 @@ typing a phone number wants that person, not people whose numbers look similar.
 ## Auth model
 
 **There are no passwords.** Signing in is two steps: request a one-time code,
-then exchange it for a session.
+then exchange it for a 24-hour access token.
 
 ```
 POST /api/auth/request-code   {"email": "you@ikrux.com"}
@@ -291,7 +286,7 @@ POST /api/auth/request-code   {"email": "you@ikrux.com"}
            "expires_in_minutes": 10, "resend_available_in_seconds": 60}
 
 POST /api/auth/verify-code    {"email": "you@ikrux.com", "code": "630843"}
-   -> 200 {"user": {...}, "csrf_token": "...", ...}   + session cookies / tokens
+   -> 200 {"user": {...}, "csrf_token": "...", "expires_at": "..."}   + cookies / token
 ```
 
 `request-code` answers identically whether or not the address has an account, so
@@ -300,28 +295,33 @@ minutes, single-use, Argon2id-hashed at rest, and invalidated by: being used,
 expiring, 5 wrong attempts, or a newer code being issued. Three limits sit on top
 — 60s resend cooldown and 5 codes per hour per address, plus a per-IP ceiling.
 
-- **Access token** — JWT, HS256, 15 minutes. Delivered as an `httpOnly` cookie scoped to `/`, or as a bearer token, per `AUTH_TRANSPORT`.
-- **Refresh token** — JWT, HS256, `httpOnly` cookie scoped to `/api/auth` so it
-  is not sent on ordinary API calls. Rotated on every use.
-- **Session** — a document in `search_and_retrieval.sessions`, revocable, with a
-  hard 24-hour absolute expiry (`REFRESH_TOKEN_TTL_HOURS`). Refresh cannot extend
-  past it, so everyone re-authenticates daily.
-- **Refresh reuse detection** — presenting an already-rotated refresh token
-  revokes the entire session family immediately. That is the signature of a
-  stolen token.
-- **Revocation is real** — every authenticated request confirms the session is
-  still live, so logout, admin deactivation and role changes take effect at
-  once rather than waiting for a token to expire.
+- **One access token, nothing else** — JWT, HS256, 24 hours
+  (`ACCESS_TOKEN_TTL_HOURS`). Delivered as an `httpOnly` cookie scoped to `/`, or
+  as a bearer token, per `AUTH_TRANSPORT`. There is no refresh token and no
+  server-side session record. When it expires the user signs in again.
+- **The account is still checked on every request** — the token is stateless,
+  but each authenticated request re-reads the user from the database. So
+  deactivating or deleting an account, or changing its role, takes effect on
+  that user's *very next request*. `role` is read from the database, never
+  trusted from the token.
+- **An individual token cannot be revoked.** This is the deliberate trade for
+  dropping sessions, and it has two consequences worth knowing:
+  - `POST /auth/logout` only clears the cookies in that browser. The token stays
+    valid until it expires, so logging out on a shared machine does not
+    invalidate a copy taken beforehand.
+  - If a token is stolen, the only lever is to deactivate the account
+    (`PATCH /api/users/{id}` with `{"active": false}`), which cuts off *all* of
+    that user's access immediately. There is no way to kill one token and leave
+    the others.
 - **CSRF** — cookie transport only, since only cookies are ambient credentials.
   `SameSite` plus a double-submit token: `verify-code` returns `csrf_token` and also sets
   it as a readable `cs_csrf` cookie; send it back as `X-CSRF-Token` on every
-  non-GET request. Enforced only once a session cookie exists and no
+  non-GET request. Enforced only once the access cookie exists and no
   `Authorization` header is present, so sign-in and bearer clients are unaffected.
 - **Codes** — Argon2id-hashed, never stored or logged in the clear.
   Rate limited per IP, per address, and per code.
 - **Roles** — `admin` and `recruiter`. Admins manage users; the API refuses to
-  demote, deactivate or delete the last active admin. Changing a role
-  or active flag revokes that user's sessions.
+  demote, deactivate or delete the last active admin.
 
 There is no signup route and no self-service account creation. The first admin comes from `scripts/create_admin.py`; the rest are created by an admin via `POST /api/users`.
 
@@ -364,7 +364,7 @@ const session = await fetch("https://api.ikrux.com/api/auth/verify-code", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ email, code }),
-}).then((r) => r.json());   // -> { access_token, refresh_token, token_type: "Bearer", ... }
+}).then((r) => r.json());   // -> { access_token, token_type: "Bearer", expires_at, ... }
 
 await fetch("https://api.ikrux.com/api/search", {
   method: "POST",
@@ -377,10 +377,16 @@ await fetch("https://api.ikrux.com/api/search", {
 typo'd address simply never receives a code. Handle `429` on resend: the response
 carries `resend_available_in_seconds` for the countdown.
 
-On a `401`, call `POST /api/auth/refresh` once and retry — with no body under
-cookie transport, or `{"refresh_token": "..."}` under bearer. If refresh also
-fails, send the user back to login. Writing the API client so the transport is a
-single swappable module keeps this a one-file change later.
+**A `401` means sign in again.** There is no refresh endpoint to try first, so
+the API client should clear its local state and route to the sign-in screen. Do
+not build a retry loop — the request will fail identically every time.
+
+`verify-code` returns `expires_at`, so the frontend can warn before the 24 hours
+are up rather than dropping the user mid-search. A search result the user is
+reading is not lost by a 401; only the next request fails.
+
+Writing the API client so the transport (cookie vs bearer) is a single swappable
+module keeps a later domain decision to a one-file change.
 
 ---
 
@@ -396,7 +402,7 @@ app/
   models.py            request/response schemas
   routers/             auth, search, profiles, users, health
   services/
-    auth_service.py    sessions, rotation, reuse detection
+    auth_service.py    account lookup, token issuing, rate limiting
     otp_service.py     one-time codes: issue, rate limit, verify
     mailer.py          Microsoft Graph client credentials + sendMail
     search_service.py  the $vectorSearch pipeline, pooling, presentation

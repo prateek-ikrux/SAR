@@ -30,7 +30,6 @@ class Settings(BaseSettings):
     search_default_exact: bool = True
     search_pool_size: int = 100
     search_max_pool_size: int = 500
-    search_max_page_size: int = 50
     search_ann_num_candidates_multiplier: int = 15
     search_cache_ttl_seconds: int = 300
     search_snippet_chars: int = 1200
@@ -38,8 +37,9 @@ class Settings(BaseSettings):
     # Auth
     jwt_secret: str
     jwt_algorithm: str = "HS256"
-    access_token_ttl_minutes: int = 15
-    refresh_token_ttl_hours: int = 24
+    # A single stateless access token. No refresh, no server-side session:
+    # everyone signs in again once a day.
+    access_token_ttl_hours: int = 24
 
     # Auth transport
     #   cookie - httpOnly cookies only. Requires the web app and this API to be
@@ -55,7 +55,6 @@ class Settings(BaseSettings):
     cookie_samesite: Literal["strict", "lax", "none"] = "strict"
     cookie_domain: str | None = None
     access_cookie_name: str = "cs_access"
-    refresh_cookie_name: str = "cs_refresh"
     csrf_cookie_name: str = "cs_csrf"
     csrf_header_name: str = "X-CSRF-Token"
     csrf_enabled: bool = True
@@ -166,10 +165,6 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
-
-    @property
-    def refresh_cookie_path(self) -> str:
-        return f"{self.api_prefix.rstrip('/')}/auth"
 
     @property
     def minio_configured(self) -> bool:
