@@ -8,8 +8,7 @@ from typing import Any
 
 from app import db
 from app.config import settings
-from app.services import dedupe
-from app.services.cache import make_key, search_pool_cache
+from app.services import dedupe, settings_service
 
 log = logging.getLogger(__name__)
 
@@ -206,12 +205,13 @@ async def search(
     query: str,
     page: int,
     page_size: int,
-    exact: bool | None,
     collapse_duplicates: bool,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     query = query.strip()
-    use_exact = settings.search_default_exact if exact is None else exact
+    # ENN vs ANN is an application-wide setting, not a per-request option: an
+    # admin sets it once and every search uses it.
+    use_exact = await settings_service.search_uses_exact()
 
     # 1. An email or phone number is an identifier, not a description.
     if dedupe.looks_like_email(query) or dedupe.looks_like_phone(query):
@@ -232,35 +232,19 @@ async def search(
             "has_more": len(results) > start + page_size,
             "pool_exhausted": True,
             "took_ms": round((time.perf_counter() - started) * 1000),
-            "cached": False,
         }
 
     # 2. Vector search over a pool, paginated in memory.
     #
-    # $vectorSearch has no skip/offset, so deep pages can only be served by
-    # asking for a larger `limit` and slicing. Re-running the query for every
-    # page would repeat the whole scan (expensive under ENN, which is
-    # exhaustive), so one pool is fetched and cached, then paged locally.
+    # $vectorSearch has no skip/offset, so a page can only be served by asking
+    # for a larger `limit` and slicing. Nothing is cached: every request runs a
+    # fresh query, so results are always current and re-running the same search
+    # genuinely re-runs it. The cost is that each page repeats the whole scan.
     needed = page * page_size
     overfetch = 3 if collapse_duplicates else 1
     pool_size = min(max(settings.search_pool_size, needed * overfetch), settings.search_max_pool_size)
 
-    cache_key = make_key(
-        q=query,
-        exact=use_exact,
-        index=settings.vector_index_name,
-        path=settings.vector_path,
-        pool=pool_size,
-    )
-    cached_entry = search_pool_cache.get(cache_key)
-    was_cached = cached_entry is not None
-
-    if cached_entry is None:
-        hits = await _run_vector_search(query=query, pool_size=pool_size, exact=use_exact)
-        search_pool_cache.set(cache_key, hits)
-    else:
-        hits = cached_entry
-
+    hits = await _run_vector_search(query=query, pool_size=pool_size, exact=use_exact)
     results = dedupe.collapse(hits) if collapse_duplicates else hits
     pool_exhausted = len(hits) < pool_size
 
@@ -283,7 +267,6 @@ async def search(
         "has_more": has_more,
         "pool_exhausted": pool_exhausted,
         "took_ms": round((time.perf_counter() - started) * 1000),
-        "cached": was_cached,
     }
 
 

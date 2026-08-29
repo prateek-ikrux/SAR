@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    // No `baseUrl`: it is deprecated and removed in TypeScript 7. Since TS 4.1
+    // `paths` entries resolve relative to this file, which is what we want.
+    // This file only drives editor IntelliSense - the alias the bundler
+    // actually uses is `resolve.alias` in vite.config.js.
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  }
+}

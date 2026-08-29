@@ -73,11 +73,9 @@ class SearchRequest(BaseModel):
     )
     page: int = Field(default=1, ge=1, le=100)
     page_size: int = Field(default=10, ge=1, le=50)
-    exact: bool | None = Field(
-        default=None,
-        description="true = ENN (deterministic, exhaustive). false = ANN. Defaults to SEARCH_DEFAULT_EXACT.",
-    )
     collapse_duplicates: bool = True
+    # No `exact` here on purpose. ENN vs ANN is an application-wide setting an
+    # admin controls at PUT /settings, so a caller cannot override it per request.
 
 
 class DuplicateRef(BaseModel):
@@ -112,7 +110,6 @@ class SearchResponse(BaseModel):
     has_more: bool
     pool_exhausted: bool
     took_ms: int
-    cached: bool
 
 
 # --------------------------------------------------------------------------- profiles
@@ -131,3 +128,18 @@ class ResumeLink(BaseModel):
     file_name: str
     url: str
     expires_in_seconds: int
+
+
+# --------------------------------------------------------------------------- settings
+class AppSettingsOut(BaseModel):
+    """Application-wide search settings. Admin-managed."""
+
+    search_exact: bool
+    updated_at: datetime | None = None
+    updated_by: str | None = None
+
+
+class UpdateSettingsRequest(BaseModel):
+    search_exact: bool = Field(
+        description="true = ENN (exhaustive, deterministic, slower). false = ANN (approximate, faster)."
+    )

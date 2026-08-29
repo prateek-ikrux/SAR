@@ -51,8 +51,8 @@ documents is what was asked for.
 
 ### 3. ENN cost at your corpus size
 
-`exact: true` (ENN) is the default here, as requested. It is deterministic and
-exhaustive: it scores **every** vector in the index for every query.
+ENN is the initial mode. It is deterministic and exhaustive: it scores **every**
+vector in the index for every query.
 
 At ~200k documents and voyage-4's 1024 dimensions, the `document` field alone is
 roughly 800 MB of vectors; all four embedded fields together are around 3 GB.
@@ -66,9 +66,15 @@ uv run python -m scripts.check_setup --query "java developer with 9 plus years o
 ```
 
 That prints ENN and ANN timings for each path. If ENN is too slow, the options in
-descending order of effort are: flip `SEARCH_DEFAULT_EXACT=false` (per-request
-`exact` still works either way), add Atlas Search Nodes so the index gets its own
-memory, or drop `email`/`phone` from the index.
+descending order of effort are: switch the mode to ANN on the admin Settings page
+(see below), add Atlas Search Nodes so the index gets its own memory, or drop
+`email`/`phone` from the index.
+
+**ENN vs ANN is an application-wide setting, not a per-request option.** An admin
+chooses it on the Settings page (`PUT /api/settings`), and **ENN is the mode until
+someone explicitly switches to ANN** — there is no environment variable that can
+make ANN the starting mode. A caller cannot override the mode on an individual
+search either, deliberately: recruiters search, they do not tune the engine.
 
 ### 4. The domain question is still open, so auth transport is configurable
 
@@ -204,6 +210,8 @@ them.
 | `POST` | `/api/search` | any | Vector search |
 | `GET` | `/api/profiles/{id}` | any | Full resume text + duplicates |
 | `GET` | `/api/profiles/{id}/resume` | any | Presigned MinIO URL (`?redirect=true` to jump straight to the PDF) |
+| `GET` | `/api/settings` | admin | Current search mode |
+| `PUT` | `/api/settings` | admin | Set ENN or ANN for everyone |
 | `GET` | `/api/users` | admin | |
 | `POST` | `/api/users` | admin | |
 | `PATCH` | `/api/users/{id}` | admin | |
@@ -218,13 +226,12 @@ POST /api/search
   "query": "java developer with 9 plus years of experience",
   "page": 1,
   "page_size": 10,
-  "exact": true,             // null -> SEARCH_DEFAULT_EXACT. true = ENN, false = ANN
   "collapse_duplicates": true
 }
 ```
 
-Response carries `strategy`, `mode` (`enn`/`ann`), `took_ms`, `cached`,
-`total_in_pool`, `has_more` and `pool_exhausted` alongside `results`.
+Response carries `strategy`, `mode` (`enn`/`ann`), `took_ms`, `total_in_pool`,
+`has_more` and `pool_exhausted` alongside `results`.
 
 Each hit has `id`, `headline`, `email`, `phone`, `file_name`, `score`, `snippet`,
 `collapsed`, `duplicate_count` and `duplicates[]`.
@@ -233,23 +240,31 @@ Each hit has `id`, `headline`, `email`, `phone`, `file_name`, `score`, `snippet`
 → `Sweety Agarwal`). Pure string handling — no enrichment pipeline, no LLM. It is
 occasionally wrong when a resume does not start with the candidate's name.
 
+### Nothing is cached
+
+Every request runs a fresh `$vectorSearch`. Results are always current, and
+searching the same text twice genuinely searches twice — the second call is a
+new query against Atlas, not a replay.
+
+The cost is real and worth knowing: **each page is a full query**. There is no
+free page 2. At ~120k documents that is roughly 800ms–1.1s per page under ENN,
+and 450–700ms under ANN, and Atlas re-embeds the query text every time.
+
 ### Pagination
 
-`$vectorSearch` has no `skip`. Deep pages exist only by asking for a larger
-`limit` and slicing the result.
+`$vectorSearch` has no `skip`, so a page is served by asking for a larger `limit`
+and slicing: `SEARCH_POOL_SIZE` (default 100), grown as needed for deeper pages
+and capped by `SEARCH_MAX_POOL_SIZE`.
 
-Re-running the query for each page would repeat the whole scan every time —
-under ENN that means a full 200k-vector pass per page. So one pool is fetched
-(`SEARCH_POOL_SIZE`, default 100, capped by `SEARCH_MAX_POOL_SIZE`), cached for
-`SEARCH_CACHE_TTL_SECONDS`, and paged in memory. Page 2 costs nothing.
+Under **ENN** this is exact and deterministic, so the same query returns the same
+ranking every time and paging is consistent.
 
-Because ENN is deterministic the cached pool is exactly what a re-query would
-return, so paging stays stable — the intuition about ENN was right, the "call
-again per page" part is just wasted work. ANN is not deterministic, which is a
-second reason to page from one pool rather than re-query.
-
-The cache is in-process. If this API is ever run as more than one replica, move
-it to Redis or pagination will jump between replicas.
+Under **ANN** it is approximate, and Atlas does not guarantee an identical
+ordering across separate calls. Because each page is now its own query rather
+than a slice of one shared pool, a candidate could in principle appear on two
+pages, or be skipped between them. In practice HNSW traversal over an unchanged
+index is stable, so this is a caveat rather than an observed problem — but ENN is
+the safer choice if consistent paging matters.
 
 ### Duplicate collapsing
 
@@ -405,9 +420,9 @@ app/
     auth_service.py    account lookup, token issuing, rate limiting
     otp_service.py     one-time codes: issue, rate limit, verify
     mailer.py          Microsoft Graph client credentials + sendMail
-    search_service.py  the $vectorSearch pipeline, pooling, presentation
+    search_service.py  the $vectorSearch pipeline, paging, presentation
+    settings_service.py app-wide search settings, admin managed
     dedupe.py          email/phone normalisation, transitive grouping
-    cache.py           in-process TTL cache for search pools
     storage.py         MinIO presigned URLs
     cookies.py         cookie policy in one place
 scripts/

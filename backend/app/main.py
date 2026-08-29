@@ -17,7 +17,8 @@ from app.config import settings
 from app.dependencies import bearer_token
 from app.logging_config import configure_logging, request_id_ctx
 from app.routers import auth, health, profiles, search, users
-from app.services import mailer
+from app.routers import settings as settings_router
+from app.services import mailer, settings_service
 
 log = logging.getLogger(__name__)
 
@@ -61,13 +62,14 @@ async def lifespan(app: FastAPI):
     await db.connect()
     await ensure_indexes()
     warn_on_auth_misconfiguration()
+    active_mode = "enn" if await settings_service.search_uses_exact() else "ann"
     log.info(
         "application started",
         extra={
             "environment": settings.environment,
             "vector_index": settings.vector_index_name,
             "vector_path": settings.vector_path,
-            "default_mode": "enn" if settings.search_default_exact else "ann",
+            "search_mode": active_mode,
             "auth_transport": settings.auth_transport,
             "mail_configured": settings.graph_configured,
             "cookie_samesite": settings.cookie_samesite if settings.uses_cookies else None,
@@ -179,5 +181,6 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
 app.include_router(health.router, prefix=settings.api_prefix)
 app.include_router(auth.router, prefix=settings.api_prefix)
 app.include_router(search.router, prefix=settings.api_prefix)
+app.include_router(settings_router.router, prefix=settings.api_prefix)
 app.include_router(profiles.router, prefix=settings.api_prefix)
 app.include_router(users.router, prefix=settings.api_prefix)

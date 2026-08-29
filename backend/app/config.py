@@ -27,11 +27,9 @@ class Settings(BaseSettings):
     # Vector search
     vector_index_name: str = "autoembed_index"
     vector_path: str = "document"
-    search_default_exact: bool = True
     search_pool_size: int = 100
     search_max_pool_size: int = 500
     search_ann_num_candidates_multiplier: int = 15
-    search_cache_ttl_seconds: int = 300
     search_snippet_chars: int = 1200
 
     # Auth

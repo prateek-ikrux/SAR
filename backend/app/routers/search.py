@@ -20,7 +20,6 @@ async def run_search(payload: SearchRequest, user: CurrentUser) -> SearchRespons
             query=payload.query,
             page=payload.page,
             page_size=payload.page_size,
-            exact=payload.exact,
             collapse_duplicates=payload.collapse_duplicates,
         )
     except OperationFailure as exc:
@@ -40,7 +39,6 @@ async def run_search(payload: SearchRequest, user: CurrentUser) -> SearchRespons
             "page": result["page"],
             "returned": result["returned"],
             "took_ms": result["took_ms"],
-            "cached": result["cached"],
         },
     )
     return SearchResponse(**result)

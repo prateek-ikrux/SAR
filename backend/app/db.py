@@ -61,5 +61,9 @@ def otp_codes() -> AsyncCollection:
     return app_db()["otp_codes"]
 
 
+def app_settings() -> AsyncCollection:
+    return app_db()["app_settings"]
+
+
 def profiles() -> AsyncCollection:
     return ats_db()[settings.profiles_collection]
