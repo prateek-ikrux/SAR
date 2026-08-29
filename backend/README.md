@@ -164,6 +164,47 @@ uv run python -m scripts.create_profile_indexes --confirm
 
 ---
 
+## Docker
+
+Two images, wired together by `docker-compose.yml` at the repo root:
+
+```bash
+docker compose up -d --build     # http://localhost:8080
+docker compose logs -f api
+docker compose down
+```
+
+Create the first admin inside the running container:
+
+```bash
+docker compose exec api python -m scripts.create_admin \
+  --email you@ikrux.com --name "Your Name" --send-code
+```
+
+**The web container proxies `/api` to the api container**, so the browser only
+ever sees one origin. That is not cosmetic: the session cookie is `httpOnly` and
+`SameSite=Strict`, and served from a separate origin the browser would accept the
+sign-in and then drop the cookie on every request after it. It also means no CORS
+configuration at all. `nginx.conf` in `frontend/` is where that lives.
+
+The api container **publishes no host port** — it is reachable only from inside
+the compose network, through the proxy.
+
+Configuration is read from `backend/.env` at run time via `env_file`. Nothing is
+baked into the image: `.dockerignore` excludes `.env`, and the built image
+contains no credentials, so the same image is safe to promote between
+environments.
+
+**Before a real deployment**, over HTTPS:
+
+- set `COOKIE_SECURE=true` (it is `false` for local http, which is why the
+  compose stack works on `http://localhost:8080`)
+- set `ENVIRONMENT=production` — this makes the config refuse to start without
+  Graph credentials, and refuse `OTP_LOG_CODE_WHEN_MAIL_UNCONFIGURED`
+- terminate TLS in front of the web container and forward `X-Forwarded-Proto`
+
+---
+
 ## Microsoft Graph setup
 
 Sign-in codes are sent from `service@ikrux.com` through Microsoft 365, using an

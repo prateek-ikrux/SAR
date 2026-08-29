@@ -1,0 +1,41 @@
+services:
+  api:
+    build:
+      context: ./backend
+    image: ikrux-candidate-search-api
+    restart: unless-stopped
+    # Configuration comes from backend/.env, which is gitignored and never
+    # baked into the image. Copy backend/.env.example to start.
+    env_file:
+      - ./backend/.env
+    environment:
+      # Inside the compose network the app is always reached through the web
+      # container, so it only ever needs to listen internally.
+      API_PREFIX: /api
+    # Deliberately not published: nothing outside the compose network should
+    # reach the API directly, and the browser must stay on one origin.
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  web:
+    build:
+      context: ./frontend
+    image: ikrux-candidate-search-web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
