@@ -8,7 +8,7 @@ from typing import Any
 
 from app import db
 from app.config import settings
-from app.services import dedupe, settings_service
+from app.services import dedupe
 
 log = logging.getLogger(__name__)
 
@@ -143,7 +143,15 @@ _PROJECTION: dict[str, Any] = {
 
 
 # --------------------------------------------------------------------- retrieval
-async def _run_vector_search(*, query: str, pool_size: int, exact: bool) -> list[dict[str, Any]]:
+async def _run_vector_search(*, query: str, pool_size: int) -> list[dict[str, Any]]:
+    """Exhaustive (ENN) vector search - `exact: true`, always.
+
+    Every query scores the whole index, so the same query always returns the
+    same ranking. ANN is not reachable from anywhere: not a request field, not a
+    setting, not an environment variable. Bringing it back means editing this
+    stage and shipping it, which is the point - approximate results should never
+    become the default because a config value drifted.
+    """
     vector_stage: dict[str, Any] = {
         "index": settings.vector_index_name,
         "path": settings.vector_path,
@@ -151,11 +159,8 @@ async def _run_vector_search(*, query: str, pool_size: int, exact: bool) -> list
         # model declared on the index (voyage-4). No queryVector needed.
         "query": {"text": query},
         "limit": pool_size,
+        "exact": True,
     }
-    if exact:
-        vector_stage["exact"] = True
-    else:
-        vector_stage["numCandidates"] = min(pool_size * settings.search_ann_num_candidates_multiplier, 10_000)
 
     pipeline: list[dict[str, Any]] = [
         {"$vectorSearch": vector_stage},
@@ -168,7 +173,6 @@ async def _run_vector_search(*, query: str, pool_size: int, exact: bool) -> list
     log.info(
         "vector search executed",
         extra={
-            "mode": "enn" if exact else "ann",
             "pool_size": pool_size,
             "returned": len(docs),
             "db_ms": round((time.perf_counter() - started) * 1000),
@@ -209,9 +213,6 @@ async def search(
 ) -> dict[str, Any]:
     started = time.perf_counter()
     query = query.strip()
-    # ENN vs ANN is an application-wide setting, not a per-request option: an
-    # admin sets it once and every search uses it.
-    use_exact = await settings_service.search_uses_exact()
 
     # 1. An email or phone number is an identifier, not a description.
     if dedupe.looks_like_email(query) or dedupe.looks_like_phone(query):
@@ -222,7 +223,6 @@ async def search(
         return {
             "query": query,
             "strategy": "identifier",
-            "mode": None,
             "page": page,
             "page_size": page_size,
             "results": window,
@@ -244,7 +244,7 @@ async def search(
     overfetch = 3 if collapse_duplicates else 1
     pool_size = min(max(settings.search_pool_size, needed * overfetch), settings.search_max_pool_size)
 
-    hits = await _run_vector_search(query=query, pool_size=pool_size, exact=use_exact)
+    hits = await _run_vector_search(query=query, pool_size=pool_size)
     results = dedupe.collapse(hits) if collapse_duplicates else hits
     pool_exhausted = len(hits) < pool_size
 
@@ -257,7 +257,6 @@ async def search(
     return {
         "query": query,
         "strategy": "vector",
-        "mode": "enn" if use_exact else "ann",
         "page": page,
         "page_size": page_size,
         "results": window,

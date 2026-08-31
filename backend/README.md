@@ -1,7 +1,7 @@
 # Candidate Search — backend
 
 Vector search and retrieval over the ikrux candidate resume corpus.
-FastAPI · MongoDB Atlas Vector Search (automated embedding, voyage-4) · MinIO · JWT auth over cookies or bearer tokens.
+FastAPI · MongoDB Atlas Vector Search (automated embedding, voyage-4) · MinIO · JWT bearer auth.
 
 Reads candidates from the existing `ats.profiles` collection. Writes nothing there.
 Its own users and sign-in codes live in a separate database, `search_and_retrieval`.
@@ -66,56 +66,47 @@ uv run python -m scripts.check_setup --query "java developer with 9 plus years o
 ```
 
 That prints ENN and ANN timings for each path. If ENN is too slow, the options in
-descending order of effort are: switch the mode to ANN on the admin Settings page
-(see below), add Atlas Search Nodes so the index gets its own memory, or drop
-`email`/`phone` from the index.
+descending order of effort are: add Atlas Search Nodes so the index gets its own
+memory, or drop `email`/`phone` from the index.
 
-**ENN vs ANN is an application-wide setting, not a per-request option.** An admin
-chooses it on the Settings page (`PUT /api/settings`), and **ENN is the mode until
-someone explicitly switches to ANN** — there is no environment variable that can
-make ANN the starting mode. A caller cannot override the mode on an individual
-search either, deliberately: recruiters search, they do not tune the engine.
+**ENN is the only mode.** `exact: true` is written directly into the
+`$vectorSearch` stage in `search_service._run_vector_search`: there is no admin
+screen, no environment variable, and no request field that can switch a search to
+ANN. Every query scores the whole index, so the same query always returns the
+same ranking. Making ANN available again means editing that stage and shipping
+it — which is the point. Approximate results should never become the default
+because a config value drifted.
 
-### 4. The domain question is still open, so auth transport is configurable
+### 4. One auth transport: bearer tokens
 
-Cookie auth is the safer design but it only works same-site. Since it is not yet
-decided whether the frontend and API share a domain, `AUTH_TRANSPORT` selects how
-the session is carried, and nothing else in the codebase changes when you switch.
+The web app and this API are independent deployments on separate origins, so a
+session cookie is not an option — `SameSite` cookies do not cross sites, and
+browsers block third-party cookies regardless of what `SameSite` says. There is
+no `AUTH_TRANSPORT` switch and no cookie code: `POST /api/auth/verify-code`
+returns `access_token` in the body, and every authenticated request carries
+`Authorization: Bearer <access_token>`.
 
-**"Same site" means the same registrable domain — not the same origin.** Sibling
-subdomains count, which is what usually catches people out:
+**The tradeoff, stated plainly.** The token lives in JavaScript — the web app
+keeps it in `localStorage` — so an XSS bug in the frontend can read it and use it
+for up to 24 hours. An `httpOnly` cookie would have prevented that, at the cost
+of only working same-site. This is the deliberate trade for deploying the two
+halves independently.
 
-| Deployment | Same site? | Setting |
-|---|---|---|
-| One origin behind a proxy — `app.ikrux.com` and `app.ikrux.com/api` | yes | `AUTH_TRANSPORT=cookie`, `COOKIE_SAMESITE=strict` |
-| Sibling subdomains — `app.ikrux.com` and `api.ikrux.com` | yes | `AUTH_TRANSPORT=cookie`, `COOKIE_SAMESITE=strict`, `COOKIE_DOMAIN=.ikrux.com`, plus `CORS_ORIGINS` |
-| Unrelated domains — `ikrux-hire.com` and `api.ikrux.com`, or a `*.vercel.app` frontend | **no** | `AUTH_TRANSPORT=bearer`, plus `CORS_ORIGINS` |
-| Local dev — `localhost:3000` and `localhost:8000` | yes | `AUTH_TRANSPORT=cookie`, `COOKIE_SECURE=false`, `CORS_ORIGINS=http://localhost:3000` |
-| Undecided | — | `AUTH_TRANSPORT=both` while you find out |
+**What falls out of it**
 
-So only the third row forces a change. Note that `COOKIE_SAMESITE=none` is *not* a
-reliable escape hatch for it: Safari and Firefox block third-party cookies
-outright regardless of `SameSite`, and Chrome is heading the same way. That is why
-cross-domain gets `bearer` rather than looser cookies.
-
-**What each transport does**
-
-- `cookie` (default) — access and CSRF cookies. The token never reaches
-  JavaScript, so XSS cannot exfiltrate it. CSRF double-submit applies.
-- `bearer` — no cookies. `POST /api/auth/verify-code` returns `access_token` in
-  the body; send `Authorization: Bearer <access_token>`. No CSRF token needed: a
-  header is not an ambient credential. The tradeoff is that the frontend now
-  holds the token, so keep it in memory rather than `localStorage`.
-- `both` — accepts either, and returns the token *and* sets cookies. The header
-  wins when both are present. Useful while the deployment shape is unsettled.
-
-Everything else — the 24-hour token lifetime, roles, the per-request account
-check — is identical across all three.
-
-Two guardrails catch the common mistakes at boot rather than in the browser:
-`COOKIE_SAMESITE=none` with an empty `CORS_ORIGINS` is refused outright
-(credentialed CORS cannot use a wildcard), and cookie transport with CORS origins
-configured logs a warning pointing at this table.
+- **No CSRF machinery.** CSRF exists because cookies are *ambient*: the browser
+  attaches them to any request to that origin, including ones a hostile page
+  triggered. An `Authorization` header is set explicitly by our own code, after
+  a CORS preflight, so there is nothing to forge. No double-submit token, no
+  `X-CSRF-Token` header, no exempt-path list.
+- **`CORS_ORIGINS` is required**, and is the one thing that must be right for the
+  browser to reach this API at all. It must list the web app's origin exactly —
+  scheme included, no trailing slash. An empty value logs a warning at boot,
+  because the failure otherwise shows up as a blocked request in the browser with
+  nothing in the API logs.
+- **No `/auth/logout` endpoint.** There would be nothing for it to do: the token
+  is stateless and there is no session record to end. Signing out is the client
+  discarding its own copy.
 
 ---
 
@@ -134,11 +125,6 @@ Interactive API docs: <http://localhost:8000/api/docs>
 
 `--send-code` mails a sign-in code immediately, which is the quickest end-to-end
 check that the Graph credentials actually work.
-
-**For local http development set `COOKIE_SECURE=false` in `.env`.** Otherwise the
-browser accepts the sign-in and then rejects every request that follows, because
-it silently discards `Secure` cookies sent over http. It looks like a broken
-session, not a config problem.
 
 Without Graph credentials you can still develop: set
 
@@ -169,7 +155,7 @@ uv run python -m scripts.create_profile_indexes --confirm
 Two images, wired together by `docker-compose.yml` at the repo root:
 
 ```bash
-docker compose up -d --build     # http://localhost:8080
+docker compose up -d --build     # web http://localhost:8080, api http://localhost:8000
 docker compose logs -f api
 docker compose down
 ```
@@ -181,27 +167,36 @@ docker compose exec api python -m scripts.create_admin \
   --email you@ikrux.com --name "Your Name" --send-code
 ```
 
-**The web container proxies `/api` to the api container**, so the browser only
-ever sees one origin. That is not cosmetic: the session cookie is `httpOnly` and
-`SameSite=Strict`, and served from a separate origin the browser would accept the
-sign-in and then drop the cookie on every request after it. It also means no CORS
-configuration at all. `nginx.conf` in `frontend/` is where that lives.
+**Both containers publish a host port**, because the browser talks to each of
+them directly. `web` serves static files and nothing else — it does not proxy the
+API. Two settings have to agree for the pair to work, and compose derives both
+from the same ports so they cannot drift:
 
-The api container **publishes no host port** — it is reachable only from inside
-the compose network, through the proxy.
+| | Set to | Where |
+|---|---|---|
+| `VITE_API_BASE_URL` | the api's origin (`http://localhost:${API_PORT}`) | build **arg** on `web` |
+| `CORS_ORIGINS` | the web app's origin (`http://localhost:${WEB_PORT}`) | env on `api`, overriding `backend/.env` |
 
-Configuration is read from `backend/.env` at run time via `env_file`. Nothing is
-baked into the image: `.dockerignore` excludes `.env`, and the built image
-contains no credentials, so the same image is safe to promote between
-environments.
+Override the ports with `WEB_PORT` / `API_PORT` in a `.env` next to
+`docker-compose.yml`.
+
+**The two images differ in how configuration reaches them, and it matters.** The
+api reads `backend/.env` at run time via `env_file`, so nothing is baked in —
+`.dockerignore` excludes `.env`, the image holds no credentials, and one image
+promotes between environments unchanged. The web image cannot work that way: Vite
+inlines `VITE_API_BASE_URL` into the bundle at build time, so **a web image is
+specific to one API origin** and pointing it somewhere else means rebuilding, not
+restarting. If you would rather promote a single web image, serve the value from
+a small runtime-generated script instead of a build arg.
 
 **Before a real deployment**, over HTTPS:
 
-- set `COOKIE_SECURE=true` (it is `false` for local http, which is why the
-  compose stack works on `http://localhost:8080`)
+- build `web` with `VITE_API_BASE_URL` set to the api's public HTTPS origin
+- set `CORS_ORIGINS` to the web app's public HTTPS origin — scheme included, no
+  trailing slash, no wildcard
 - set `ENVIRONMENT=production` — this makes the config refuse to start without
   Graph credentials, and refuse `OTP_LOG_CODE_WHEN_MAIL_UNCONFIGURED`
-- terminate TLS in front of the web container and forward `X-Forwarded-Proto`
+- terminate TLS in front of both containers
 
 ---
 
@@ -246,13 +241,10 @@ them.
 |---|---|---|---|
 | `POST` | `/api/auth/request-code` | — | Emails a one-time sign-in code |
 | `POST` | `/api/auth/verify-code` | — | Exchanges the code for a 24h access token |
-| `POST` | `/api/auth/logout` | any | Clears cookies in this browser (token stays valid until expiry) |
 | `GET` | `/api/auth/me` | any | |
 | `POST` | `/api/search` | any | Vector search |
 | `GET` | `/api/profiles/{id}` | any | Full resume text + duplicates |
 | `GET` | `/api/profiles/{id}/resume` | any | Presigned MinIO URL (`?redirect=true` to jump straight to the PDF) |
-| `GET` | `/api/settings` | admin | Current search mode |
-| `PUT` | `/api/settings` | admin | Set ENN or ANN for everyone |
 | `GET` | `/api/users` | admin | |
 | `POST` | `/api/users` | admin | |
 | `PATCH` | `/api/users/{id}` | admin | |
@@ -271,8 +263,8 @@ POST /api/search
 }
 ```
 
-Response carries `strategy`, `mode` (`enn`/`ann`), `took_ms`, `total_in_pool`,
-`has_more` and `pool_exhausted` alongside `results`.
+Response carries `strategy` (`vector` or `identifier`), `took_ms`,
+`total_in_pool`, `has_more` and `pool_exhausted` alongside `results`.
 
 Each hit has `id`, `headline`, `email`, `phone`, `file_name`, `score`, `snippet`,
 `collapsed`, `duplicate_count` and `duplicates[]`.
@@ -288,8 +280,8 @@ searching the same text twice genuinely searches twice — the second call is a
 new query against Atlas, not a replay.
 
 The cost is real and worth knowing: **each page is a full query**. There is no
-free page 2. At ~120k documents that is roughly 800ms–1.1s per page under ENN,
-and 450–700ms under ANN, and Atlas re-embeds the query text every time.
+free page 2. At ~120k documents that is roughly 800ms–1.1s per page, and Atlas
+re-embeds the query text every time.
 
 ### Pagination
 
@@ -297,15 +289,11 @@ and 450–700ms under ANN, and Atlas re-embeds the query text every time.
 and slicing: `SEARCH_POOL_SIZE` (default 100), grown as needed for deeper pages
 and capped by `SEARCH_MAX_POOL_SIZE`.
 
-Under **ENN** this is exact and deterministic, so the same query returns the same
-ranking every time and paging is consistent.
-
-Under **ANN** it is approximate, and Atlas does not guarantee an identical
-ordering across separate calls. Because each page is now its own query rather
-than a slice of one shared pool, a candidate could in principle appear on two
-pages, or be skipped between them. In practice HNSW traversal over an unchanged
-index is stable, so this is a caveat rather than an observed problem — but ENN is
-the safer choice if consistent paging matters.
+Because searches run ENN, this is exact and deterministic: the same query returns
+the same ranking every time, so paging is consistent even though each page is its
+own query. That property is the reason ANN is not an option — under an
+approximate search a candidate could appear on two pages, or be skipped between
+them, since Atlas does not guarantee identical ordering across separate calls.
 
 ### Duplicate collapsing
 
@@ -342,7 +330,7 @@ POST /api/auth/request-code   {"email": "you@ikrux.com"}
            "expires_in_minutes": 10, "resend_available_in_seconds": 60}
 
 POST /api/auth/verify-code    {"email": "you@ikrux.com", "code": "630843"}
-   -> 200 {"user": {...}, "csrf_token": "...", "expires_at": "..."}   + cookies / token
+   -> 200 {"user": {...}, "access_token": "eyJ...", "expires_at": "..."}
 ```
 
 `request-code` answers identically whether or not the address has an account, so
@@ -352,9 +340,9 @@ expiring, 5 wrong attempts, or a newer code being issued. Three limits sit on to
 — 60s resend cooldown and 5 codes per hour per address, plus a per-IP ceiling.
 
 - **One access token, nothing else** — JWT, HS256, 24 hours
-  (`ACCESS_TOKEN_TTL_HOURS`). Delivered as an `httpOnly` cookie scoped to `/`, or
-  as a bearer token, per `AUTH_TRANSPORT`. There is no refresh token and no
-  server-side session record. When it expires the user signs in again.
+  (`ACCESS_TOKEN_TTL_HOURS`), returned in the `verify-code` body and sent back as
+  `Authorization: Bearer`. There is no refresh token and no server-side session
+  record. When it expires the user signs in again.
 - **The account is still checked on every request** — the token is stateless,
   but each authenticated request re-reads the user from the database. So
   deactivating or deleting an account, or changing its role, takes effect on
@@ -362,18 +350,18 @@ expiring, 5 wrong attempts, or a newer code being issued. Three limits sit on to
   trusted from the token.
 - **An individual token cannot be revoked.** This is the deliberate trade for
   dropping sessions, and it has two consequences worth knowing:
-  - `POST /auth/logout` only clears the cookies in that browser. The token stays
-    valid until it expires, so logging out on a shared machine does not
-    invalidate a copy taken beforehand.
+  - Signing out is the client discarding its own copy — there is no logout
+    endpoint, because there is nothing server-side to end. The token stays valid
+    until it expires, so signing out on a shared machine does not invalidate a
+    copy taken beforehand.
   - If a token is stolen, the only lever is to deactivate the account
     (`PATCH /api/users/{id}` with `{"active": false}`), which cuts off *all* of
     that user's access immediately. There is no way to kill one token and leave
     the others.
-- **CSRF** — cookie transport only, since only cookies are ambient credentials.
-  `SameSite` plus a double-submit token: `verify-code` returns `csrf_token` and also sets
-  it as a readable `cs_csrf` cookie; send it back as `X-CSRF-Token` on every
-  non-GET request. Enforced only once the access cookie exists and no
-  `Authorization` header is present, so sign-in and bearer clients are unaffected.
+- **No CSRF protection, deliberately** — there is nothing to protect. CSRF
+  attacks work by making the browser attach an *ambient* credential to a request
+  the user did not intend; an `Authorization` header is not ambient. No cookie is
+  ever read or set by this API.
 - **Codes** — Argon2id-hashed, never stored or logged in the clear.
   Rate limited per IP, per address, and per code.
 - **Roles** — `admin` and `recruiter`. Admins manage users; the API refuses to
@@ -386,45 +374,28 @@ There is no signup route and no self-service account creation. The first admin c
 The sign-in screen is two states: collect the email, then collect the code. Keep
 the email in component state between them — `verify-code` needs both.
 
-**Cookie transport** — nothing is stored client-side except the CSRF token:
-
 ```ts
 // Screen 1
-await fetch("/api/auth/request-code", {
+await fetch(`${API}/api/auth/request-code`, {
   method: "POST",
-  credentials: "include",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ email }),
 });
 
-// Screen 2
-const session = await fetch("/api/auth/verify-code", {
+// Screen 2 -> { user, access_token, expires_at }
+const session = await fetch(`${API}/api/auth/verify-code`, {
   method: "POST",
-  credentials: "include",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ email, code }),
 }).then((r) => r.json());
 
-await fetch("/api/search", {
+// Every call after that
+await fetch(`${API}/api/search`, {
   method: "POST",
-  credentials: "include",
-  headers: { "Content-Type": "application/json", "X-CSRF-Token": session.csrf_token },
-  body: JSON.stringify({ query: "java developer with 9 plus years", page: 1, page_size: 10 }),
-});
-```
-
-**Bearer transport** — same endpoints, token held in memory:
-
-```ts
-const session = await fetch("https://api.ikrux.com/api/auth/verify-code", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ email, code }),
-}).then((r) => r.json());   // -> { access_token, token_type: "Bearer", expires_at, ... }
-
-await fetch("https://api.ikrux.com/api/search", {
-  method: "POST",
-  headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${session.access_token}`,
+  },
   body: JSON.stringify({ query: "java developer with 9 plus years", page: 1, page_size: 10 }),
 });
 ```
@@ -441,8 +412,9 @@ not build a retry loop — the request will fail identically every time.
 are up rather than dropping the user mid-search. A search result the user is
 reading is not lost by a 401; only the next request fails.
 
-Writing the API client so the transport (cookie vs bearer) is a single swappable
-module keeps a later domain decision to a one-file change.
+Keep the token in one module rather than reading it at each call site. The web
+app does this in `src/lib/authToken.js`, which is also the only place that knows
+it lives in `localStorage`.
 
 ---
 
@@ -462,10 +434,8 @@ app/
     otp_service.py     one-time codes: issue, rate limit, verify
     mailer.py          Microsoft Graph client credentials + sendMail
     search_service.py  the $vectorSearch pipeline, paging, presentation
-    settings_service.py app-wide search settings, admin managed
     dedupe.py          email/phone normalisation, transitive grouping
     storage.py         MinIO presigned URLs
-    cookies.py         cookie policy in one place
 scripts/
   check_setup.py             inspect the index, compare paths, time ENN vs ANN
   create_admin.py            create the first admin, optionally mail a code

@@ -42,15 +42,12 @@ class UserOut(BaseModel):
 
 class LoginResponse(BaseModel):
     user: UserOut
-    csrf_token: str
-    # When the access token expires. There is no refresh: signing in again is
-    # the only way to extend, so the frontend should send the user back to the
-    # sign-in screen at this point.
+    # Send this back as `Authorization: Bearer <access_token>`.
+    access_token: str
+    # When it expires. There is no refresh: signing in again is the only way to
+    # extend, so the frontend returns the user to the sign-in screen at this
+    # point rather than waiting for the next 401.
     expires_at: datetime
-    # Populated only when AUTH_TRANSPORT is bearer or both. Under cookie
-    # transport the token never touches JavaScript.
-    access_token: str | None = None
-    token_type: str | None = None
 
 
 # --------------------------------------------------------------------------- users
@@ -74,8 +71,8 @@ class SearchRequest(BaseModel):
     page: int = Field(default=1, ge=1, le=100)
     page_size: int = Field(default=10, ge=1, le=50)
     collapse_duplicates: bool = True
-    # No `exact` here on purpose. ENN vs ANN is an application-wide setting an
-    # admin controls at PUT /settings, so a caller cannot override it per request.
+    # No `exact` here on purpose. Search always runs ENN - see
+    # search_service._run_vector_search - and no caller can change that.
 
 
 class DuplicateRef(BaseModel):
@@ -100,7 +97,6 @@ class SearchHit(BaseModel):
 class SearchResponse(BaseModel):
     query: str
     strategy: Literal["vector", "identifier"]
-    mode: Literal["enn", "ann"] | None = None
     page: int
     page_size: int
     results: list[SearchHit]
@@ -128,18 +124,3 @@ class ResumeLink(BaseModel):
     file_name: str
     url: str
     expires_in_seconds: int
-
-
-# --------------------------------------------------------------------------- settings
-class AppSettingsOut(BaseModel):
-    """Application-wide search settings. Admin-managed."""
-
-    search_exact: bool
-    updated_at: datetime | None = None
-    updated_by: str | None = None
-
-
-class UpdateSettingsRequest(BaseModel):
-    search_exact: bool = Field(
-        description="true = ENN (exhaustive, deterministic, slower). false = ANN (approximate, faster)."
-    )

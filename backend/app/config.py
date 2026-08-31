@@ -29,7 +29,6 @@ class Settings(BaseSettings):
     vector_path: str = "document"
     search_pool_size: int = 100
     search_max_pool_size: int = 500
-    search_ann_num_candidates_multiplier: int = 15
     search_snippet_chars: int = 1200
 
     # Auth
@@ -38,24 +37,6 @@ class Settings(BaseSettings):
     # A single stateless access token. No refresh, no server-side session:
     # everyone signs in again once a day.
     access_token_ttl_hours: int = 24
-
-    # Auth transport
-    #   cookie - httpOnly cookies only. Requires the web app and this API to be
-    #            same-site (one origin behind a proxy, or sibling subdomains).
-    #   bearer - Authorization: Bearer headers only, tokens returned in the login
-    #            body. Works across unrelated domains, where browsers increasingly
-    #            refuse third-party cookies outright.
-    #   both   - accept either. Cookies are still set; tokens are also returned.
-    auth_transport: Literal["cookie", "bearer", "both"] = "cookie"
-
-    # Cookies
-    cookie_secure: bool = True
-    cookie_samesite: Literal["strict", "lax", "none"] = "strict"
-    cookie_domain: str | None = None
-    access_cookie_name: str = "cs_access"
-    csrf_cookie_name: str = "cs_csrf"
-    csrf_header_name: str = "X-CSRF-Token"
-    csrf_enabled: bool = True
 
     # One-time codes
     otp_length: int = 6
@@ -120,19 +101,6 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _check_cookie_policy(self) -> Settings:
-        if self.cookie_samesite == "none" and not self.cookie_secure:
-            raise ValueError("COOKIE_SAMESITE=none requires COOKIE_SECURE=true.")
-        if self.environment == "production" and not self.cookie_secure:
-            raise ValueError("COOKIE_SECURE must be true in production.")
-        if self.uses_cookies and self.cookie_samesite == "none" and not self.cors_origin_list:
-            raise ValueError(
-                "COOKIE_SAMESITE=none is a cross-site deployment, so CORS_ORIGINS must list "
-                "the frontend origin(s). Credentialed CORS cannot use a wildcard."
-            )
-        return self
-
-    @model_validator(mode="after")
     def _check_mail_policy(self) -> Settings:
         if self.environment == "production" and not self.graph_configured:
             raise ValueError(
@@ -151,14 +119,6 @@ class Settings(BaseSettings):
         return bool(
             self.graph_tenant_id and self.graph_client_id and self.graph_client_secret and self.graph_sender
         )
-
-    @property
-    def uses_cookies(self) -> bool:
-        return self.auth_transport in ("cookie", "both")
-
-    @property
-    def uses_bearer(self) -> bool:
-        return self.auth_transport in ("bearer", "both")
 
     @property
     def cors_origin_list(self) -> list[str]:

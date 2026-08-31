@@ -37,10 +37,6 @@ def new_otp_code(length: int) -> str:
     return first + rest
 
 
-def new_csrf_token() -> str:
-    return secrets.token_urlsafe(32)
-
-
 def utcnow() -> datetime:
     return datetime.now(UTC)
 

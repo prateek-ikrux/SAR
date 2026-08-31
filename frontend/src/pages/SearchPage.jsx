@@ -181,9 +181,7 @@ export default function SearchPage() {
       {data && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
           <span>
-            {data.strategy === "identifier"
-              ? "Exact identifier lookup"
-              : `Vector search · ${data.mode?.toUpperCase()}`}
+            {data.strategy === "identifier" ? "Exact identifier lookup" : "Vector search"}
           </span>
           <span>·</span>
           <span>

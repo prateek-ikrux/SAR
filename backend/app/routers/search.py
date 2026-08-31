@@ -35,7 +35,6 @@ async def run_search(payload: SearchRequest, user: CurrentUser) -> SearchRespons
         extra={
             "user_id": str(user["_id"]),
             "strategy": result["strategy"],
-            "mode": result["mode"],
             "page": result["page"],
             "returned": result["returned"],
             "took_ms": result["took_ms"],

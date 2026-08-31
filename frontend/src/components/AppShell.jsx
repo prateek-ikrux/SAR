@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation, useNavigate } from "react-router";
-import { LogOut, Monitor, Moon, Search, Settings, Sun, Users } from "lucide-react";
+import { LogOut, Monitor, Moon, Search, Sun, Users } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -57,12 +57,9 @@ export default function AppShell() {
     .join("");
 
   function signOut() {
-    logout.mutate(undefined, {
-      onSettled: () => {
-        toast.success("Signed out");
-        navigate("/sign-in", { replace: true });
-      },
-    });
+    logout();
+    toast.success("Signed out");
+    navigate("/sign-in", { replace: true });
   }
 
   return (
@@ -80,14 +77,9 @@ export default function AppShell() {
               Search
             </NavLink>
             {user?.role === "admin" && (
-              <>
-                <NavLink to="/users" icon={Users}>
-                  Users
-                </NavLink>
-                <NavLink to="/settings" icon={Settings}>
-                  Settings
-                </NavLink>
-              </>
+              <NavLink to="/users" icon={Users}>
+                Users
+              </NavLink>
             )}
           </nav>
 
@@ -135,7 +127,7 @@ export default function AppShell() {
 
               <DropdownMenuSeparator />
 
-              <DropdownMenuItem onClick={signOut} disabled={logout.isPending}>
+              <DropdownMenuItem onClick={signOut}>
                 <LogOut className="size-4" />
                 Sign out
               </DropdownMenuItem>

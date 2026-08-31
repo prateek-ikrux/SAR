@@ -4,7 +4,6 @@ from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Request, status
 
-from app.config import settings
 from app.security import ACCESS, decode_token
 from app.services import auth_service
 
@@ -13,26 +12,18 @@ def _unauthorized(detail: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
 
 
-def bearer_token(request: Request) -> str | None:
+def access_token(request: Request) -> str | None:
+    """The bearer token from the Authorization header, if there is one.
+
+    A header is the only transport: the web app keeps its token in localStorage
+    and sets this explicitly. Nothing is read from cookies, so no request is
+    ever authenticated by an ambient credential - which is what makes CSRF
+    protection unnecessary here.
+    """
     header = request.headers.get("authorization") or ""
     scheme, _, value = header.partition(" ")
     if scheme.lower() == "bearer" and value.strip():
         return value.strip()
-    return None
-
-
-def access_token(request: Request) -> str | None:
-    """Pull the access token from whichever transport this deployment uses.
-
-    The header is checked first so that a browser holding a stale cookie cannot
-    shadow an explicit Authorization header.
-    """
-    if settings.uses_bearer:
-        token = bearer_token(request)
-        if token:
-            return token
-    if settings.uses_cookies:
-        return request.cookies.get(settings.access_cookie_name)
     return None
 
 

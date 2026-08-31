@@ -14,21 +14,11 @@ from pymongo import ASCENDING, DESCENDING
 
 from app import db
 from app.config import settings
-from app.dependencies import bearer_token
 from app.logging_config import configure_logging, request_id_ctx
 from app.routers import auth, health, profiles, search, users
-from app.routers import settings as settings_router
-from app.services import mailer, settings_service
+from app.services import mailer
 
 log = logging.getLogger(__name__)
-
-SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
-# Sign-in happens before any session exists, so there is no CSRF token to send yet.
-CSRF_EXEMPT_PATHS = {
-    f"{settings.api_prefix}/auth/request-code",
-    f"{settings.api_prefix}/auth/verify-code",
-}
-
 
 async def ensure_indexes() -> None:
     """Create this application's own indexes. Never touches the ats database."""
@@ -42,17 +32,16 @@ async def ensure_indexes() -> None:
     log.info("application indexes ensured", extra={"database": settings.mongo_db_app})
 
 
-def warn_on_auth_misconfiguration() -> None:
-    """Catch the cross-site cookie trap at boot rather than in the browser."""
-    if settings.uses_cookies and settings.cors_origin_list and settings.cookie_samesite != "none":
+def warn_on_cors_misconfiguration() -> None:
+    """Catch the missing-origin trap at boot rather than in the browser.
+
+    The web app is a separate deployment on its own origin, so without
+    CORS_ORIGINS the browser blocks every call and the app looks simply broken.
+    """
+    if not settings.cors_origin_list:
         log.warning(
-            "CORS origins are configured but cookies are SameSite=%s. That is correct for a "
-            "same-site deployment (one origin, or sibling subdomains of ikrux.com). If the "
-            "frontend is served from a different registrable domain the browser will drop these "
-            "cookies silently - set AUTH_TRANSPORT=bearer, or COOKIE_SAMESITE=none with "
-            "COOKIE_SECURE=true.",
-            settings.cookie_samesite,
-            extra={"cors_origins": settings.cors_origin_list},
+            "CORS_ORIGINS is empty. Any browser calling this API from another origin will be "
+            "blocked before the request is even sent. Set it to the web app's origin."
         )
 
 
@@ -61,18 +50,15 @@ async def lifespan(app: FastAPI):
     configure_logging(settings.log_level)
     await db.connect()
     await ensure_indexes()
-    warn_on_auth_misconfiguration()
-    active_mode = "enn" if await settings_service.search_uses_exact() else "ann"
+    warn_on_cors_misconfiguration()
     log.info(
         "application started",
         extra={
             "environment": settings.environment,
             "vector_index": settings.vector_index_name,
             "vector_path": settings.vector_path,
-            "search_mode": active_mode,
-            "auth_transport": settings.auth_transport,
             "mail_configured": settings.graph_configured,
-            "cookie_samesite": settings.cookie_samesite if settings.uses_cookies else None,
+            "cors_origins": settings.cors_origin_list,
         },
     )
     yield
@@ -94,40 +80,13 @@ if settings.cors_origin_list:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
-        allow_credentials=True,
+        # The session is a bearer header the web app sets itself, never a cookie
+        # the browser attaches on its own. Nothing needs credentialed CORS, so
+        # not allowing it keeps that door shut.
+        allow_credentials=False,
         allow_methods=["*"],
-        allow_headers=["*", settings.csrf_header_name],
+        allow_headers=["*"],
     )
-
-
-# Starlette runs the last-registered middleware outermost, so CSRF is declared
-# first and request_context second: every response, CSRF rejections included,
-# gets an x-request-id and a log line.
-@app.middleware("http")
-async def csrf_protection(request: Request, call_next):
-    """Double-submit CSRF check on top of SameSite cookies.
-
-    Only cookies are ambient credentials, so this applies only to requests the
-    browser authenticates with one. A request carrying an Authorization header
-    was made deliberately by JavaScript that already cleared a CORS preflight,
-    and needs no CSRF token.
-    """
-    if (
-        settings.csrf_enabled
-        and settings.uses_cookies
-        and request.method not in SAFE_METHODS
-        and request.url.path not in CSRF_EXEMPT_PATHS
-        and not bearer_token(request)
-    ):
-        if settings.access_cookie_name in request.cookies:
-            cookie_token = request.cookies.get(settings.csrf_cookie_name)
-            header_token = request.headers.get(settings.csrf_header_name)
-            if not cookie_token or not header_token or cookie_token != header_token:
-                return JSONResponse(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    content={"detail": f"Missing or invalid {settings.csrf_header_name} header"},
-                )
-    return await call_next(request)
 
 
 @app.middleware("http")
@@ -152,6 +111,7 @@ async def request_context(request: Request, call_next):
             "request_id": request_id,
         },
     )
+    print('this request is being gone through the request context')
     return response
 
 
@@ -181,6 +141,5 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
 app.include_router(health.router, prefix=settings.api_prefix)
 app.include_router(auth.router, prefix=settings.api_prefix)
 app.include_router(search.router, prefix=settings.api_prefix)
-app.include_router(settings_router.router, prefix=settings.api_prefix)
 app.include_router(profiles.router, prefix=settings.api_prefix)
 app.include_router(users.router, prefix=settings.api_prefix)

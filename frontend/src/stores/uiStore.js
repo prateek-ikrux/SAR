@@ -6,10 +6,10 @@ const MAX_RECENT = 8;
 /**
  * Client-only state. Nothing here comes from the API.
  *
- * Deliberately does NOT hold the current user or any auth flag - under cookie
- * auth "am I signed in" is server state, so React Query owns it via /auth/me.
- * Keeping a copy here would give us two sources of truth that drift apart the
- * moment a token expires.
+ * Deliberately does NOT hold the current user or any auth flag - "am I signed
+ * in" is server state, so React Query owns it via /auth/me and the token lives
+ * in @/lib/authToken. Keeping a copy here would give us two sources of truth
+ * that drift apart the moment a token expires.
  */
 export const useUiStore = create(
   persist(
@@ -20,9 +20,10 @@ export const useUiStore = create(
         set({ theme });
       },
 
-      // Scores are useful while we are still judging result quality, and
-      // meaningless to a recruiter. Toggle rather than hard-code.
-      showScores: true,
+      // Hidden by default: a cosine similarity means nothing to a recruiter and
+      // invites ranking arguments it cannot settle. The toggle stays for the
+      // times we are judging result quality ourselves.
+      showScores: false,
       toggleScores: () => set((s) => ({ showScores: !s.showScores })),
 
       recentSearches: [],
@@ -36,6 +37,12 @@ export const useUiStore = create(
     }),
     {
       name: "candidate-search-ui",
+      // Scores used to default to on, and that choice is already persisted in
+      // every browser that has run this app. Without a version bump the new
+      // default would never be seen. This is a one-time reset, not a lasting
+      // override: toggling still sticks from here on.
+      version: 1,
+      migrate: (state) => ({ ...state, showScores: false }),
       onRehydrateStorage: () => (state) => applyTheme(state?.theme ?? "system"),
     },
   ),

@@ -1,3 +1,11 @@
+# Two independent deployments that happen to be brought up together.
+#
+# The web container serves static files and nothing else - it does not proxy the
+# API. The browser loads the app from one origin and calls the API on another, so
+# both containers publish a host port and CORS is what makes the pair work.
+#
+# Override the ports with WEB_PORT / API_PORT in a .env file next to this one.
+
 services:
   api:
     build:
@@ -9,13 +17,14 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      # Inside the compose network the app is always reached through the web
-      # container, so it only ever needs to listen internally.
-      API_PREFIX: /api
-    # Deliberately not published: nothing outside the compose network should
-    # reach the API directly, and the browser must stay on one origin.
-    expose:
-      - "8000"
+      # Compose decides the web app's published port, so compose also decides
+      # the origin the API must accept - keeping these two from drifting apart
+      # is worth overriding whatever backend/.env says.
+      CORS_ORIGINS: http://localhost:${WEB_PORT:-8080}
+    # Published: the browser talks to this container directly, so it has to be
+    # reachable from the host rather than only from the compose network.
+    ports:
+      - "${API_PORT:-8000}:8000"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
       interval: 30s
@@ -26,10 +35,18 @@ services:
   web:
     build:
       context: ./frontend
+      args:
+        # Baked into the bundle at build time, so changing API_PORT means
+        # rebuilding this image, not just restarting it. localhost is correct
+        # here because the browser runs on the Docker host; a real deployment
+        # passes the API's public URL instead.
+        VITE_API_BASE_URL: http://localhost:${API_PORT:-8000}
     image: ikrux-candidate-search-web
     restart: unless-stopped
     ports:
       - "${WEB_PORT:-8080}:80"
+    # Not a hard requirement - the static files serve fine on their own. It just
+    # avoids handing someone a sign-in screen that cannot reach the API yet.
     depends_on:
       api:
         condition: service_healthy

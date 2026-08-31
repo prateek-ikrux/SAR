@@ -10,6 +10,13 @@ COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
     npm ci
 
+# Where the browser should send API calls. Vite inlines this into the bundle at
+# build time, so it is a build argument rather than a runtime variable - and the
+# resulting image is specific to one API origin. Point it at the public URL of
+# the api deployment, scheme included and no trailing slash.
+ARG VITE_API_BASE_URL
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+
 COPY . .
 RUN npm run build
 

@@ -5,12 +5,12 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 import { setUnauthorizedHandler } from "@/lib/api";
+import { clearToken } from "@/lib/authToken";
 import { meKey, useMe } from "@/hooks/useAuth";
 import AppShell from "@/components/AppShell";
 import SignInPage from "@/pages/SignInPage";
 import SearchPage from "@/pages/SearchPage";
 import UsersPage from "@/pages/UsersPage";
-import SettingsPage from "@/pages/SettingsPage";
 
 function FullPageSpinner() {
   return (
@@ -33,9 +33,12 @@ export default function App() {
   const navigate = useNavigate();
 
   // One place decides what a 401 means. There is no refresh token, so the
-  // session is simply over: clear it and let RequireAuth route to sign-in.
+  // session is simply over: drop the stored token and let RequireAuth route to
+  // sign-in. The api interceptor clears it too, so this also covers a session
+  // ended from anywhere that does not go through axios.
   useEffect(() => {
     setUnauthorizedHandler(() => {
+      clearToken();
       queryClient.setQueryData(meKey, null);
       navigate("/sign-in", { replace: true });
     });
@@ -58,14 +61,6 @@ export default function App() {
             element={
               <RequireAuth adminOnly>
                 <UsersPage />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/settings"
-            element={
-              <RequireAuth adminOnly>
-                <SettingsPage />
               </RequireAuth>
             }
           />

@@ -1,32 +1,25 @@
 import axios from "axios";
+import { clearToken, getToken } from "@/lib/authToken";
 
 /**
  * The single place that knows how the session is carried.
  *
- * Today: httpOnly cookies, same origin (Vite proxies /api to the API in dev).
- * If the frontend ever lands on a different registrable domain, cookies stop
- * working and the API switches to AUTH_TRANSPORT=bearer - at which point only
- * this file changes: drop `withCredentials`, keep the token in memory, and set
- * an Authorization header in the request interceptor.
+ * Bearer tokens, held in localStorage by @/lib/authToken. The web app and the
+ * API deploy as independent containers on separate origins, where a same-site
+ * session cookie cannot reach - so the token travels in an Authorization header
+ * instead. Nothing here reads or writes cookies, and `withCredentials` is off:
+ * no ambient credential means no CSRF token to double-submit either.
  */
 export const api = axios.create({
-  baseURL: "/api",
-  withCredentials: true,
+  baseURL: import.meta.env.VITE_API_BASE_URL || "/api",
   timeout: 60_000,
 });
 
-function csrfToken() {
-  const match = document.cookie.split("; ").find((c) => c.startsWith("cs_csrf="));
-  return match ? decodeURIComponent(match.split("=")[1]) : "";
-}
-
-const SAFE_METHODS = ["get", "head", "options"];
-
 api.interceptors.request.use((config) => {
-  if (!SAFE_METHODS.includes((config.method || "get").toLowerCase())) {
-    const token = csrfToken();
-    if (token) config.headers["X-CSRF-Token"] = token;
-  }
+  // Read per request rather than at module load, so a sign-in or a sign-out
+  // takes effect on the very next call without rebuilding the client.
+  const token = getToken();
+  if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
@@ -44,10 +37,13 @@ api.interceptors.response.use(
     const status = error.response?.status;
     const url = error.config?.url || "";
 
-    // There is no refresh token: a 401 means the 24 hour token has expired or
-    // the account was disabled. Retrying would fail identically, so the only
-    // correct move is to send the user back to sign-in.
+    // There is no refresh token: a 401 means the 24 hour token has expired, and
+    // a 403 from these endpoints means the account was deactivated. Retrying
+    // would fail identically, so discard the token and send the user back to
+    // sign-in. Dropping it here as well as in the handler keeps storage and the
+    // in-app session from disagreeing after a reload.
     if ((status === 401 || status === 403) && !AUTH_PATHS.some((p) => url.startsWith(p))) {
+      clearToken();
       onUnauthorized(status);
     }
     return Promise.reject(error);
