@@ -21,13 +21,11 @@ async def request_code(payload: RequestCodeRequest, request: Request) -> Request
     endpoint cannot be used to enumerate staff email addresses.
     """
     ip = client_ip(request)
+    auth_service.check_login_rate_limit(ip)
     try:
-        auth_service.check_login_rate_limit(ip)
         await otp_service.request_code(
             email=payload.email, ip=ip, user_agent=request.headers.get("user-agent")
         )
-    except auth_service.AuthError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
     except otp_service.OtpError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
@@ -42,11 +40,9 @@ async def request_code(payload: RequestCodeRequest, request: Request) -> Request
 async def verify_code(payload: VerifyCodeRequest, request: Request) -> LoginResponse:
     """Step 2 of sign-in: exchange a valid code for a 24 hour access token."""
     ip = client_ip(request)
+    auth_service.check_login_rate_limit(ip)
     try:
-        auth_service.check_login_rate_limit(ip)
         user = await otp_service.verify_code(email=payload.email, code=payload.code)
-    except auth_service.AuthError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
     except otp_service.OtpError as exc:
         log.info("code verification rejected", extra={"email": payload.email, "ip": ip})
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc

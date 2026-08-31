@@ -5,7 +5,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, status
+from fastapi import Depends, FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,9 +14,11 @@ from pymongo import ASCENDING, DESCENDING
 
 from app import db
 from app.config import settings
+from app.dependencies import ip_rate_limit
 from app.logging_config import configure_logging, request_id_ctx
 from app.routers import auth, health, profiles, search, users
 from app.services import mailer
+from app.services.rate_limit import RateLimitError
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +76,10 @@ app = FastAPI(
     docs_url=f"{settings.api_prefix}/docs",
     openapi_url=f"{settings.api_prefix}/openapi.json",
     redoc_url=None,
+    # Applied to every route in the app, including the health probes and the
+    # sign-in endpoints. Declared here rather than per router so a new endpoint
+    # cannot be added without it.
+    dependencies=[Depends(ip_rate_limit)],
 )
 
 if settings.cors_origin_list:
@@ -113,6 +119,25 @@ async def request_context(request: Request, call_next):
     )
     print('this request is being gone through the request context')
     return response
+
+
+@app.exception_handler(RateLimitError)
+async def rate_limit_handler(request: Request, exc: RateLimitError) -> JSONResponse:
+    """One place turns a rate limit into a response, so no router has to.
+
+    Retry-After tells the caller exactly how long the oldest hit still has to age
+    out, which is more useful than a flat guess and is what a well-behaved client
+    will wait for.
+    """
+    log.info(
+        "rate limited",
+        extra={"path": request.url.path, "retry_after": exc.retry_after},
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.message},
+        headers={"Retry-After": str(exc.retry_after)},
+    )
 
 
 @app.exception_handler(RequestValidationError)

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import logging
-import time
-from collections import defaultdict, deque
 from typing import Any
 
 from bson import ObjectId
@@ -11,6 +9,7 @@ from bson.errors import InvalidId
 from app import db
 from app.config import settings
 from app.security import create_access_token, utcnow
+from app.services import rate_limit
 
 log = logging.getLogger(__name__)
 
@@ -23,18 +22,20 @@ class AuthError(Exception):
 
 
 # --------------------------------------------------------------------- rate limiting
-_login_attempts: dict[str, deque] = defaultdict(deque)
-
-
 def check_login_rate_limit(ip: str) -> None:
-    """Per-IP ceiling on sign-in traffic, on top of the per-address limits in otp_service."""
-    window_start = time.monotonic() - 60
-    bucket = _login_attempts[ip]
-    while bucket and bucket[0] < window_start:
-        bucket.popleft()
-    if len(bucket) >= settings.login_rate_limit_per_minute:
-        raise AuthError("Too many sign-in attempts. Try again in a minute.", status_code=429)
-    bucket.append(time.monotonic())
+    """Per-IP ceiling on sign-in traffic.
+
+    Tighter than the app-wide per-IP limit because sign-in is the one place an
+    anonymous caller can make the server do expensive work - an Argon2 hash and
+    an outbound mail send. The per-address limits in otp_service sit underneath
+    this and are the ones that actually bound code guessing.
+    """
+    rate_limit.check(
+        key=f"login:{ip}",
+        limit=settings.login_rate_limit_per_minute,
+        window_seconds=60,
+        message="Too many sign-in attempts. Try again in a minute.",
+    )
 
 
 # --------------------------------------------------------------------- helpers

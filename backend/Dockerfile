@@ -47,4 +47,9 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/api/health || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --no-proxy-headers is not optional here. Uvicorn trusts X-Forwarded-For by
+# default and rewrites the client address from it, which would hand the app a
+# value any caller can forge - and per-IP rate limiting keyed on a forgeable
+# address is no rate limiting at all. The app decides for itself whether to
+# believe that header, via TRUST_PROXY_HEADERS.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers"]

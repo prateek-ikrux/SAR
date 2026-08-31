@@ -364,10 +364,47 @@ expiring, 5 wrong attempts, or a newer code being issued. Three limits sit on to
   ever read or set by this API.
 - **Codes** — Argon2id-hashed, never stored or logged in the clear.
   Rate limited per IP, per address, and per code.
+- **Rate limiting sits in four layers**, all sliding one-minute windows in
+  `services/rate_limit.py`. See below.
 - **Roles** — `admin` and `recruiter`. Admins manage users; the API refuses to
   demote, deactivate or delete the last active admin.
 
 There is no signup route and no self-service account creation. The first admin comes from `scripts/create_admin.py`; the rest are created by an admin via `POST /api/users`.
+
+### Rate limiting
+
+| Layer | Keyed on | Applies to | Default |
+|---|---|---|---|
+| `RATE_LIMIT_PER_IP_PER_MINUTE` | client address | every endpoint, via a global dependency | 300 |
+| `RATE_LIMIT_PER_USER_PER_MINUTE` | account id from the token | every authenticated endpoint, inside `current_user` | 120 |
+| `SEARCH_RATE_LIMIT_PER_MINUTE` | account id | `POST /api/search` only | 20 |
+| `LOGIN_RATE_LIMIT_PER_MINUTE` | client address | the two sign-in endpoints | 10 |
+
+The per-**user** ceilings are the ones that matter most. A token cannot be revoked
+before it expires, so if one leaks, capping what it can do per minute is the only
+brake available — and a per-IP limit would not provide it, because the holder can
+change address. Search gets its own tighter ceiling because one search is a full
+scan of the index plus a billable embedding, and because paging through results is
+the shape a bulk extraction would take.
+
+Exceeding any of them returns `429` with a `Retry-After` header saying exactly how
+many seconds until the oldest hit ages out. One exception handler in `main.py`
+does that translation, so no router catches it and no new endpoint can forget it.
+
+**Two things have to be true for the address-keyed layers to mean anything.**
+`TRUST_PROXY_HEADERS` must be false unless a reverse proxy you control is the only
+route in — otherwise any caller can hand themselves a fresh bucket per request by
+setting `X-Forwarded-For`. And **uvicorn must run with `--no-proxy-headers`**,
+which the Dockerfile does: uvicorn trusts that header *by default* and rewrites
+the client address from it before the application ever sees it, so fixing this in
+application code alone is not enough. When a proxy genuinely is in front, set
+`TRUST_PROXY_HEADERS=true` and the app reads the rightmost hop — the entry your
+proxy appended, rather than the left end the client made up.
+
+The windows live in process memory. That is exact for one container; run N
+replicas and each keeps its own allowance, so the effective ceiling is N times the
+configured number. `services/rate_limit.py` is the single module to move behind a
+shared store if that ever needs to be precise.
 
 ### Frontend integration sketch
 
@@ -430,7 +467,8 @@ app/
   models.py            request/response schemas
   routers/             auth, search, profiles, users, health
   services/
-    auth_service.py    account lookup, token issuing, rate limiting
+    auth_service.py    account lookup, token issuing, sign-in rate limit
+    rate_limit.py      sliding-window counters shared by every limit
     otp_service.py     one-time codes: issue, rate limit, verify
     mailer.py          Microsoft Graph client credentials + sendMail
     search_service.py  the $vectorSearch pipeline, paging, presentation

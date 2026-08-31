@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 from pymongo.errors import OperationFailure
 
-from app.dependencies import CurrentUser
+from app.dependencies import SearchUser
 from app.models import SearchRequest, SearchResponse
 from app.services import search_service
 
@@ -14,7 +14,7 @@ router = APIRouter(prefix="/search", tags=["search"])
 
 
 @router.post("", response_model=SearchResponse)
-async def run_search(payload: SearchRequest, user: CurrentUser) -> SearchResponse:
+async def run_search(payload: SearchRequest, user: SearchUser) -> SearchResponse:
     try:
         result = await search_service.search(
             query=payload.query,

@@ -69,6 +69,8 @@ def decode_token(token: str, *, expected_type: str = ACCESS) -> dict[str, Any] |
             algorithms=[settings.jwt_algorithm],
             options={"require": ["exp", "iat", "sub", "jti"]},
         )
+    except jwt.ExpiredSignatureError:
+        return None
     except jwt.PyJWTError:
         return None
     if payload.get("typ") != expected_type:

@@ -55,8 +55,26 @@ class Settings(BaseSettings):
     graph_sender: str = "service@ikrux.com"
     graph_timeout_seconds: float = 15.0
 
-    # Login protection
+    # Rate limiting. Every ceiling is per minute.
+    #   ip     - a coarse ceiling on every endpoint, including the unauthenticated
+    #            ones. Generous: a page load fires several requests at once.
+    #   user   - every authenticated endpoint, keyed by account rather than by
+    #            address, so it still applies to a stolen token.
+    #   search - the expensive endpoint. One search is a full scan of the index
+    #            plus a billable embedding, so it gets its own tighter ceiling.
+    #   login  - sign-in only, on top of the per-address limits in otp_service.
+    rate_limit_per_ip_per_minute: int = 300
+    rate_limit_per_user_per_minute: int = 120
+    search_rate_limit_per_minute: int = 20
     login_rate_limit_per_minute: int = 10
+
+    # Whether X-Forwarded-For may be believed. False means the client address is
+    # taken from the socket, which is the only safe reading when this API is
+    # reachable directly - the header is trivially set by any caller, and
+    # trusting it lets anyone give themselves an unlimited number of rate-limit
+    # buckets. Set true ONLY when a reverse proxy you control is the sole route
+    # to this service.
+    trust_proxy_headers: bool = False
 
     # MinIO
     minio_endpoint: str = ""
