@@ -39,8 +39,9 @@ services:
         # Baked into the bundle at build time, so changing API_PORT means
         # rebuilding this image, not just restarting it. localhost is correct
         # here because the browser runs on the Docker host; a real deployment
-        # passes the API's public URL instead.
-        VITE_API_BASE_URL: http://localhost:${API_PORT:-8000}
+        # passes the API's public URL instead. The /api suffix is part of it -
+        # the app appends paths like /search directly to this value.
+        VITE_API_BASE_URL: http://localhost:${API_PORT:-8000}/api
     image: ikrux-candidate-search-web
     restart: unless-stopped
     ports:

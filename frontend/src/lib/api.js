@@ -2,16 +2,31 @@ import axios from "axios";
 import { clearToken, getToken } from "@/lib/authToken";
 
 /**
- * The single place that knows how the session is carried.
+ * The single place that knows how to reach the API and how the session is
+ * carried.
  *
- * Bearer tokens, held in localStorage by @/lib/authToken. The web app and the
- * API deploy as independent containers on separate origins, where a same-site
- * session cookie cannot reach - so the token travels in an Authorization header
- * instead. Nothing here reads or writes cookies, and `withCredentials` is off:
- * no ambient credential means no CSRF token to double-submit either.
+ * Bearer tokens, held in localStorage by @/lib/authToken. This app and the API
+ * are separate deployments on separate origins, where a same-site session cookie
+ * cannot reach - so the token travels in an Authorization header instead.
+ * Nothing here reads or writes cookies, and `withCredentials` is off: no ambient
+ * credential means no CSRF token to double-submit either.
  */
+
+// Required, with no fallback. A guess would be worse than an error: the app
+// would start, look fine, and 404 on every request with nothing explaining why.
+const baseURL = import.meta.env.VITE_API_BASE_URL;
+
+if (!baseURL) {
+  throw new Error(
+    "VITE_API_BASE_URL is not set. This app reaches the Candidate Search API " +
+      "over the network and has no default. For local development copy " +
+      ".env.example to .env; for a container build pass it as a build argument. " +
+      "Include the API prefix, e.g. http://localhost:8000/api",
+  );
+}
+
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || "/api",
+  baseURL,
   timeout: 60_000,
 });
 
